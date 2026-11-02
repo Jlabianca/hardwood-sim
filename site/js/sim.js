@@ -103,11 +103,14 @@
       return {
         id: p.id, name: p.name, short: p.short, pos: p.pos, team: abbr, target: targets[i] * 60, start: p.start, min: p.min,
         fga: r.fga, trip, tov: r.tov, fg3rate, p3: p.p3, ft: p.ft, rim: p.rim, prim: p.prim, pmid: p.pmid,
-        corner: p.corner, dunk: p.dunk, and1,
+        corner: p.corner, dunk: p.dunk, and1, d: p.d || 0,
         oreb: r.oreb, dreb: r.dreb, ast: r.ast, stl: r.stl, blk: r.blk, pf: r.pf,
       };
     });
-    return { abbr, ps, pace: T.pace, T, L };
+    // the team's usual on-court defense (minutes actually played), so lineups — and absences — are measured against it
+    let dAvg = T.d_base;
+    if (dAvg == null) { dAvg = 0; for (const p of ps) dAvg += p.d * (p.target / 60); dAvg /= 240; }
+    return { abbr, ps, pace: T.pace, T, L, dAvg };
   }
 
   // league-average per-minute rates (for lineup strength ratios)
@@ -151,6 +154,30 @@
     const ldef = [tm[1].T, tm[0].T]; // defending team's factors, indexed by offense side
     const effBase = L.eff_scale || 0;
     const home = neutral ? -1 : 1;
+    // rest: points relative to a normal day off, split between the team's offense and its defense
+    const R = L.rest || {}, rest = opts.rest || {};
+    const rPts = [R[rest.away] || 0, R[rest.home] || 0];
+    const PL = L.def_scale || 0.022; // logit per point per 100 possessions
+    const restAdj = [PL * (rPts[0] - rPts[1]) / 2, PL * (rPts[1] - rPts[0]) / 2];
+    // matchups: mu[offSide][offIdx] = defIdx, rebuilt whenever lineups change
+    const mu = [{}, {}];
+    function assignMatchups() {
+      for (let o = 0; o < 2; o++) {
+        const d = 1 - o, offs = on[o].slice(), defs = on[d].slice(), m = {};
+        const order = { G: 0, F: 1, C: 2 };
+        offs.sort((a, b) => order[tm[o].ps[a].pos] - order[tm[o].ps[b].pos] || tm[o].ps[b].fga - tm[o].ps[a].fga);
+        defs.sort((a, b) => order[tm[d].ps[a].pos] - order[tm[d].ps[b].pos] || tm[d].ps[b].d - tm[d].ps[a].d);
+        // same position first (best defender takes the most dangerous scorer), then whoever is left
+        const free = new Set(defs);
+        for (const i of offs) {
+          const pos = tm[o].ps[i].pos;
+          const j = defs.find((x) => free.has(x) && tm[d].ps[x].pos === pos);
+          if (j != null) { m[i] = j; free.delete(j); }
+        }
+        for (const i of offs) if (m[i] == null) { const j = [...free][0]; m[i] = j; free.delete(j); }
+        mu[o] = m;
+      }
+    }
 
     // ---- rotation ----
     const isCloseLate = () => q >= 4 && tleft <= 300 && Math.abs(score[0] - score[1]) <= 12;
@@ -200,6 +227,7 @@
       const mode = force === "start" ? "start" : q > 4 ? "close" : garbage() ? "garbage" : isCloseLate() ? "close" : "normal";
       for (let s = 0; s < 2; s++) on[s] = chooseLineup(s, mode);
       lastSub = elapsed;
+      assignMatchups();
     }
 
     // ---- helpers ----
@@ -319,13 +347,18 @@
           zone = rng() < clamp(rs, 0.05, 0.97) ? "rim" : "mid";
         }
         let base = zone === "three" ? p.p3 : zone === "rim" ? p.prim : p.pmid;
-        let lg = logit(clamp(base, 0.05, 0.95)) + effBase + 4.0 * (D.d_efg || 0) + loadAdj;
+        let lg = logit(clamp(base, 0.05, 0.95)) + effBase + 4.0 * (D.d_efg || 0) + loadAdj + restAdj[o];
+        // lineup defense: the five defenders vs. the team's usual defense, plus the man guarding the shooter
+        let dSum = 0; for (const j of on[d]) dSum += tm[d].ps[j].d;
+        const guard = mu[o][actor];
+        const dG = guard != null ? tm[d].ps[guard].d : dSum / 5;
+        lg -= PL * ((dSum - 5 * tm[d].dAvg) + (L.matchup_w || 0) * (dG - dSum / 5));
         if (home !== -1 && o === 1) lg += L.home_edge;
         if (trans && zone !== "three") lg += 0.15;
         if (chance > 1 && zone === "rim") lg += 0.1;
         const made = rng() < sigm(lg);
         B.fga++; if (three) B.fg3a++;
-        if (ev) { ev.kind = three ? "3" : "2"; ev.zone = zone; ev.pid = p.id; ev.made = made; ev.putback = chance > 1; geo(ev, zone, p); }
+        if (ev) { ev.kind = three ? "3" : "2"; ev.zone = zone; ev.pid = p.id; ev.made = made; ev.putback = chance > 1; ev.def = guard != null ? tm[d].ps[guard].id : null; geo(ev, zone, p); }
         if (made) {
           B.fgm++; if (three) B.fg3m++;
           addPts(o, three ? 3 : 2);

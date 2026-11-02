@@ -73,7 +73,7 @@
     $("awaySel").onchange = $("homeSel").onchange = () => {
       if ($("awaySel").value !== $("homeSel").value) selectGame({ away: $("awaySel").value, home: $("homeSel").value });
     };
-    $("neutralChk").onchange = () => { newGame(seed); projStale = true; if (activeTab() === "proj") runProjections(); };
+    $("neutralChk").onchange = $("restAway").onchange = $("restHome").onchange = () => { newGame(seed); projStale = true; if (activeTab() === "proj") runProjections(); };
     renderGames();
   }
   function renderGames() {
@@ -81,9 +81,19 @@
     $("gameList").innerHTML = model.schedule.filter((g) => g.date === d).map((g) => {
       const tail = g.home_score != null ? ` <span class="fin">${g.away_score}-${g.home_score}</span>` : ` <span class="fin">${tipTime(g.start)}</span>`;
       const sel = g.away === cur.away && g.home === cur.home ? "sel" : "";
-      return `<button class="${sel}" data-id="${g.id}">${g.away} @ ${g.home}${tail}</button>`;
+      const bb = (t) => (restCat(t, g.date) === "b2b" ? `<span class="b2b" title="second night of a back-to-back">B2B</span>` : "");
+      return `<button class="${sel}" data-id="${g.id}">${g.away}${bb(g.away)} @ ${g.home}${bb(g.home)}${tail}</button>`;
     }).join("") || `<span class="dim">No games on this date.</span>`;
     $("gameList").querySelectorAll("button").forEach((b) => (b.onclick = () => selectGame(model.schedule.find((g) => g.id === b.dataset.id))));
+  }
+  const REST_LBL = { b2b: "B2B", "1": "1 day", "2+": "2+ days" };
+  function restCat(team, date) { // days off before a game on `date`, from the schedule
+    if (!date) return "1";
+    let prev = null;
+    for (const g of model.schedule) if ((g.home === team || g.away === team) && g.date < date && (!prev || g.date > prev)) prev = g.date;
+    if (!prev) return "1";
+    const days = Math.round((Date.parse(date) - Date.parse(prev)) / 864e5) - 1;
+    return days <= 0 ? "b2b" : days === 1 ? "1" : "2+";
   }
   function schedFor(a, h) {
     const d = $("dateSel").value;
@@ -104,6 +114,9 @@
     $("mTotal").value = sg && sg.total != null ? sg.total : "";
     $("mktNote").textContent = sg && sg.home_spread != null ? "closing lines" : "";
     $("spreadLbl").textContent = `${g.home} spread`;
+    $("restAwayLbl").textContent = g.away; $("restHomeLbl").textContent = g.home;
+    $("restAway").value = restCat(g.away, sg ? sg.date : g.date);
+    $("restHome").value = restCat(g.home, sg ? sg.date : g.date);
     renderGames(); renderRoster();
     projStale = true; projResult = null;
     $("projOut").classList.add("hidden"); $("runInfo").textContent = "";
@@ -157,7 +170,8 @@
   }
 
   function simOpts(extra) {
-    return Object.assign({ away: cur.away, home: cur.home, out: [...outSet], minutes, neutral: $("neutralChk").checked }, extra);
+    return Object.assign({ away: cur.away, home: cur.home, out: [...outSet], minutes, neutral: $("neutralChk").checked,
+      rest: { away: $("restAway").value, home: $("restHome").value } }, extra);
   }
   function newGame(s) {
     pause();
@@ -179,6 +193,7 @@
     $("rowAway").classList.remove("has-ball", "trail"); $("rowHome").classList.remove("has-ball", "trail");
     $("qtr").textContent = "1ST"; $("clock").textContent = "12:00";
     $("lead").textContent = "TIP-OFF"; $("run").textContent = ""; $("poss").textContent = "";
+    $("restTag").textContent = [[cur.away, $("restAway").value], [cur.home, $("restHome").value]].filter((x) => x[1] === "b2b").map((x) => `${x[0]} B2B`).join(" · ");
     $("pType").textContent = ""; $("pType").className = "ptype mono";
     const ta = model.teams[cur.away], th = model.teams[cur.home];
     $("pDesc").textContent = `${ta.name} (${ta.record}) at ${th.name} (${th.record}). Press play to start.`;
@@ -254,11 +269,11 @@
       if (e.made) {
         label = (three ? "3-POINTER" : e.dunk ? "DUNK" : "2-POINTER") + (e.and1 ? " · AND-ONE" : "");
         cls = three || e.dunk || e.and1 ? "big" : "made";
-        desc = `${p} ${shot}` + (e.ast ? ` (assist ${nm(e.ast)})` : "") + ".";
+        desc = `${p} ${shot}` + (e.def ? ` over ${nm(e.def)}` : "") + (e.ast ? ` (assist ${nm(e.ast)})` : "") + ".";
         if (e.and1) desc += ` Fouled by ${nm(e.by)} — ${e.ftm ? "makes" : "misses"} the free throw.` + (e.ftm ? "" : rebTxt());
       } else {
         label = e.blk ? "BLOCKED" : three ? "MISSED 3" : "MISSED 2"; cls = e.blk ? "to" : "miss";
-        desc = e.blk ? `${nm(e.blk)} blocks ${p}'s ${shot}.` : `${p} misses a ${shot}.`;
+        desc = e.blk ? `${nm(e.blk)} blocks ${p}'s ${shot}.` : `${p} misses a ${shot}` + (e.def ? `, ${nm(e.def)} defending.` : ".");
         desc += rebTxt();
       }
     }
@@ -550,6 +565,11 @@
       ["Avg total", meanOf(total).toFixed(1), `median ${quant(sortedTotal, 0.5)} · 1H ${meanOf(total1h).toFixed(1)}`],
       ["Overtime", pct(r.ot / n), `${r.ot.toLocaleString()} of ${n.toLocaleString()} games`],
     ];
+    const rA = $("restAway").value, rH = $("restHome").value;
+    if (rA !== "1" || rH !== "1") {
+      const R = model.league.rest || {}, edge = (R[rH] || 0) - (R[rA] || 0);
+      cards.push(["Rest", `${REST_LBL[rA]} / ${REST_LBL[rH]}`, `${A} / ${H} · worth ${edge >= 0 ? H : A} ~${Math.abs(edge).toFixed(1)} pts (built in)`]);
+    }
     const sp = num($("mSpread").value), tl = num($("mTotal").value);
     if (sp != null) {
       const cover = margin.filter((m) => m + sp > 0).length / n, push = margin.filter((m) => m + sp === 0).length / n;
@@ -645,20 +665,21 @@
     $("injNote").textContent = (model.injury_source === "espn"
       ? "Players listed Out on ESPN's injury report, or not with the team for its last 3 games, start unchecked. "
       : "The injury report couldn't be loaded for this build, so players who missed their team's last game start unchecked. ") +
-      "Toggle anyone in or out, or type projected minutes to override the model (blank = model). Everyone else's minutes and shots re-balance. Changes apply to both tabs.";
+      "Toggle anyone in or out, or type projected minutes to override the model (blank = model). Everyone else's minutes and shots re-balance. DEF is each player's defensive rating (points per 100 possessions saved, from play-by-play): it shapes the lineup's defense and who guards whom. Changes apply to both tabs.";
     const block = (t) => {
       const T = model.teams[t];
       const tgt = NBASim.minuteTargets(T.players.filter((p) => !outSet.has(p.id)), minutes);
       const tmap = {}; T.players.filter((p) => !outSet.has(p.id)).forEach((p, i) => (tmap[p.id] = tgt[i]));
       const avg = (v) => (v == null ? "–" : v);
-      return `<div class="team"><h3 style="color:${col(t)}">${T.name} <span class="dim">${T.record}</span></h3><div class="hdr"><span></span><span>Player</span><span>Status</span><span>Proj min</span><span>PTS</span><span>REB</span><span>AST</span></div>` +
+      return `<div class="team"><h3 style="color:${col(t)}">${T.name} <span class="dim">${T.record}</span></h3><div class="hdr"><span></span><span>Player</span><span>Status</span><span>Proj min</span><span>PTS</span><span>REB</span><span>AST</span><span title="Defensive rating: points per 100 possessions the opponent scores less with him on the floor (adjusted plus-minus from play-by-play)">DEF</span></div>` +
         T.players.map((p) => {
           const off = outSet.has(p.id), ov = minutes[p.id] != null;
           const val = off ? "" : ov ? minutes[p.id] : tmap[p.id].toFixed(1);
           return `<label class="${off ? "off" : ""}" title="${(p.inj_note || "").replace(/"/g, "'")}"><input type="checkbox" data-id="${p.id}" ${off ? "" : "checked"}>
           <span>${p.name} <span class="pos">${p.pos}</span></span><span class="st">${p.status || ""}</span>
           <span><input type="number" min="0" max="48" step="1" data-min="${p.id}" class="${ov ? "ovr" : ""}" value="${val}" ${off ? "disabled" : ""}></span>
-          <span>${avg(p.avg.pts)}</span><span>${avg(p.avg.reb)}</span><span>${avg(p.avg.ast)}</span></label>`;
+          <span>${avg(p.avg.pts)}</span><span>${avg(p.avg.reb)}</span><span>${avg(p.avg.ast)}</span>
+          <span class="${(p.d || 0) >= 1 ? "dpos" : (p.d || 0) <= -1 ? "dneg" : ""}">${(p.d || 0) > 0 ? "+" : ""}${(p.d || 0).toFixed(1)}</span></label>`;
         }).join("") + "</div>";
     };
     $("rosters").innerHTML = block(cur.away) + block(cur.home);

@@ -23,11 +23,14 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+from lineups import defensive_ratings, stints
+
 HOOPR = "https://raw.githubusercontent.com/sportsdataverse/hoopR-nba-data/main/nba"
 FILES = {
     "player_box_{y}.parquet": HOOPR + "/player_box/parquet/player_box_{y}.parquet",
     "team_box_{y}.parquet": HOOPR + "/team_box/parquet/team_box_{y}.parquet",
     "shots_{y}.parquet": HOOPR + "/shots/parquet/shots_{y}.parquet",
+    "play_by_play_{y}.parquet": HOOPR + "/pbp/parquet/play_by_play_{y}.parquet",
 }
 CUR_ONLY = {
     "nba_schedule_{y}.parquet": HOOPR + "/schedules/parquet/nba_schedule_{y}.parquet",
@@ -44,6 +47,8 @@ RATE_SHRINK_MIN = 15.0    # minutes of league-average (by position) added to eve
 TEAM_HALF_LIFE = 10.0     # games; recency decay for team pace/defense
 TEAM_PRIOR_W = 0.25       # weight of a prior-season game in team pace/defense
 TEAM_SHRINK = 12.0        # games of league average added to team factors
+DEF_LAMBDA = 2500.0       # ridge penalty (possessions) for the defensive plus-minus regression
+DEF_PRIOR_W = 0.6         # weight of last season's possessions in the defensive regression
 
 STATS = ["min", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "ast", "stl", "blk", "tov", "pf", "pts"]
 BOX_COLS = {
@@ -117,6 +122,38 @@ def shot_table(shots):
     s["dunk"] = s["type_text"].astype(str).str.contains("Dunk")
     s["athlete_id"] = idstr(s["athlete_id_1"])
     return s
+
+
+def rest_effects(tb):
+    """Point effect of rest (back-to-back, 1, 2+ days off), from a margin regression with team strengths."""
+    t = tb.copy()
+    t["gd"] = pd.to_datetime(t["game_date"])
+    t = t.sort_values("gd")
+    t["rest"] = t.groupby(["yr", "team_id"])["gd"].diff().dt.days - 1
+    t["rc"] = pd.cut(t["rest"].fillna(1), [-1, 0, 1, 1000], labels=["b2b", "1", "2+"]).astype(str)
+    h = t[t["team_home_away"] == "home"].set_index("game_id")
+    aw = t[t["team_home_away"] == "away"].set_index("game_id")
+    g = h[["yr", "team_id", "team_score", "rc"]].join(aw[["team_id", "team_score", "rc"]], rsuffix="_a", how="inner")
+    if len(g) < 300:
+        return {"b2b": -2.4, "1": 0.0, "2+": 0.2}
+    keys = sorted(set(zip(g["yr"], g["team_id"])) | set(zip(g["yr"], g["team_id_a"])))
+    ix = {k: i for i, k in enumerate(keys)}
+    cats = ["b2b", "2+"]  # relative to 1 day of rest (the normal schedule)
+    n = len(keys)
+    X = np.zeros((len(g), n + 1 + len(cats)))
+    r = np.arange(len(g))
+    X[r, [ix[k] for k in zip(g["yr"], g["team_id"])]] = 1
+    X[r, [ix[k] for k in zip(g["yr"], g["team_id_a"])]] = -1
+    X[:, n] = 1
+    for c, cat in enumerate(cats):
+        X[:, n + 1 + c] = (g["rc"].values == cat).astype(float) - (g["rc_a"].values == cat).astype(float)
+    pen = np.eye(X.shape[1]) * 2.0
+    pen[n, n] = 0
+    beta = np.linalg.solve(X.T @ X + pen, X.T @ (g["team_score"] - g["team_score_a"]).values)
+    out = {"1": 0.0}
+    for c, cat in enumerate(cats):
+        out[cat] = round(float(beta[n + 1 + c]), 2)
+    return out
 
 
 def main():
@@ -343,6 +380,34 @@ def main():
             "status": status, "absent": absent, "missed3": bool(missed3),
         })
 
+    # ---------------- lineups & defensive impact ----------------
+    team_of_game = dict(zip(zip(pb["game_id"].astype(str), pb["athlete_id"]), pb["team_id"]))
+    sframes = []
+    for y in (season - 1, season):
+        pbp = read(a.raw, f"play_by_play_{y}.parquet")
+        if pbp is None:
+            continue
+        pbp = pbp[(pbp["season_type"] == 2) & (pbp["game_date"].astype(str) < asof)]
+        st_ = stints(pbp, team_of_game)
+        st_["w"] = 1.0 if y == season else DEF_PRIOR_W
+        sframes.append(st_)
+    drapm = {}
+    if sframes:
+        S = pd.concat(sframes, ignore_index=True)
+        _, drapm = defensive_ratings(S, S["w"].values, DEF_LAMBDA)
+    d_base = {}
+    for t, ps in players_by_team.items():
+        for p in ps:
+            p["d"] = round(drapm.get(p["id"], 0.0), 2)
+        # the team's usual defense: weighted by minutes actually played this season (falls back to projections)
+        tid = teams_meta[t]["id"]
+        mins = cur[(cur["team_id"] == tid) & cur["played"]].groupby("athlete_id")["min"].sum().to_dict()
+        w = {p["id"]: mins.get(p["id"], 0.0) for p in ps}
+        if sum(w.values()) < 240:
+            w = {p["id"]: max(p["min"], 0.0) for p in ps}
+        tot = sum(w.values()) or 1.0
+        d_base[t] = round(sum(p["d"] * w[p["id"]] for p in ps) / tot, 3)
+
     # season averages for the roster tab
     for t, ps in players_by_team.items():
         for p in ps:
@@ -413,10 +478,13 @@ def main():
             "d_ftr": round(f["o_ftr"] / lg["o_ftr"], 4),      # free-throw rate allowed vs league
             "d_3par": round(f["o_3par"] / lg["o_3par"], 4),   # 3-point attempt rate allowed vs league
             "players": players_by_team.get(abbr, []),
+            "d_base": d_base.get(abbr, 0.0),
         }
 
     hm = tb[tb["team_home_away"] == "home"]
     home_margin = (hm["team_score"] - hm["o_team_score"]).mean()
+    rest = rest_effects(tb)
+    print("rest effects (pts vs. 1 day of rest):", rest)
 
     # ---------------- league constants ----------------
     lpc = lg_played
@@ -439,7 +507,10 @@ def main():
         "extra_foul": 0.065,
         "load_k": 0.35,       # efficiency bonus/penalty per log-unit of lineup shot creation vs league  # non-shooting fouls per possession (foul-outs only)
         "home_edge": 0.035,
-        "home_margin": round(float(home_margin), 2),   # logit bump on home shooting (~2.5 pts); calibrate.js can retune
+        "home_margin": round(float(home_margin), 2),
+        "rest": rest,
+        "def_scale": 0.022,   # logit of opponent shot-making per point/100 of on-court defensive rating
+        "matchup_w": 1.5,     # extra weight of the primary defender's rating on his man's shots   # logit bump on home shooting (~2.5 pts); calibrate.js can retune
         "eff_scale": 0.0, "pace_scale": 1.0,
     }
 

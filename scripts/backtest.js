@@ -9,15 +9,25 @@ const actual = JSON.parse(fs.readFileSync(`backtest/actuals_${season}.json`));
 const N = +(process.env.N || 1000);
 const rows = [], props = { pts: [], reb: [], ast: [], fg3m: [] }, base = { pts: [], reb: [], ast: [] };
 const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+const NOREST = process.env.NOREST === "1";
+function restCat(model, team, date) {
+  let prev = null;
+  for (const g of model.schedule) if ((g.home === team || g.away === team) && g.date < date && (!prev || g.date > prev)) prev = g.date;
+  if (!prev) return "1";
+  const days = Math.round((Date.parse(date) - Date.parse(prev)) / 864e5) - 1;
+  return days <= 0 ? "b2b" : days === 1 ? "1" : "2+";
+}
 for (let k = 0; k < dates.length; k++) {
   const d0 = dates[k];
   const d1 = new Date(Date.parse(d0) + 7 * 864e5).toISOString().slice(0, 10);
   const model = JSON.parse(fs.readFileSync(`backtest/model_${d0}.json`));
+  if (process.env.DEF_SCALE) model.league.def_scale = +process.env.DEF_SCALE;
   const games = actual.filter((g) => g.date >= d0 && g.date < d1 && model.teams[g.home] && model.teams[g.away]);
   for (const g of games) {
     const ids = [...model.teams[g.home].players, ...model.teams[g.away].players].map((p) => p.id);
     const out = ids.filter((id) => !g.players[id] || g.players[id].min <= 0);
-    const agg = Sim.simulateMany(model, { away: g.away, home: g.home, out, seed: 7 }, N);
+    const rest = NOREST ? undefined : { away: restCat(model, g.away, g.date), home: restCat(model, g.home, g.date) };
+    const agg = Sim.simulateMany(model, { away: g.away, home: g.home, out, rest, seed: 7 }, N);
     const margin = Array.from(agg.home, (h, i) => h - agg.away[i]);
     const total = Array.from(agg.home, (h, i) => h + agg.away[i]);
     rows.push({ g, mMargin: mean(margin), mTotal: mean(total), pHome: agg.wins.home / N });
