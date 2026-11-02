@@ -14,6 +14,7 @@
   </div>
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="watch" role="tab">Watch a sim</button>
+    <button class="tab" data-tab="slate" role="tab">Slate</button>
     <button class="tab" data-tab="proj" role="tab">Projections &amp; props</button>
     <button class="tab" data-tab="roster" role="tab">Injuries / minutes</button>
   </nav>
@@ -74,6 +75,41 @@
     <p class="note mono">SIMULATED GAME · NOT A REAL GAME · SHOT LOCATIONS ARE ILLUSTRATIVE · DATA: HOOPR / SPORTSDATAVERSE (ESPN)</p>
   </section>
 
+  <!-- SLATE -->
+  <section id="tab-slate" class="pane">
+    <div class="controls">
+      <label>Sims per game <select id="slateN"><option>1000</option><option selected>2000</option><option>5000</option></select></label>
+      <button id="btnSlate" class="primary">Run slate</button>
+      <div class="progress"><i id="slateProg"></i></div>
+      <span class="dim mono" id="slateInfo">Runs every game on the date picked above.</span>
+    </div>
+    <div id="slateOut" class="hidden">
+      <h3 class="sec">Games <span class="dim">· type market lines to get cover / over odds · click a matchup to open it</span></h3>
+      <div class="scrollx"><table class="props slategames" id="slateGames"></table></div>
+      <div class="propbar">
+        <h3>All props</h3>
+        <label>Stat <select id="slateStat">
+          <option value="pts" selected>Points</option><option value="reb">Rebounds</option><option value="ast">Assists</option>
+          <option value="fg3m">3-pointers made</option><option value="pra">Pts + Reb + Ast</option><option value="pr">Pts + Reb</option>
+          <option value="pa">Pts + Ast</option><option value="ra">Reb + Ast</option><option value="stl">Steals</option>
+          <option value="blk">Blocks</option><option value="stocks">Steals + Blocks</option><option value="tov">Turnovers</option>
+          <option value="min">Minutes</option><option value="dd">Double-double</option><option value="td">Triple-double</option>
+        </select></label>
+        <label>Game <select id="slateGame"><option value="">All games</option></select></label>
+        <label>Sort <select id="slateSort"><option value="proj">Projection</option><option value="edge">Biggest edge (your lines)</option></select></label>
+        <input id="slateSearch" type="search" placeholder="Find player">
+        <button id="btnSlateCsv">Download CSV</button>
+      </div>
+      <details class="paste"><summary>Paste lines</summary>
+        <p class="dim">One per line: <span class="mono">player, stat, line</span> — e.g. <span class="mono">Jalen Brunson, pts, 25.5</span>. Stats: pts, reb, ast, 3pm, pra, pr, pa, ra, stl, blk, stocks, tov, min. Lines are shared with the Projections tab.</p>
+        <textarea id="pasteBox" rows="5" placeholder="Jalen Brunson, pts, 25.5&#10;Karl-Anthony Towns, reb, 11.5&#10;Derrick White, 3pm, 2.5"></textarea>
+        <div><button id="btnPaste">Apply lines</button> <span class="dim" id="pasteInfo"></span></div>
+      </details>
+      <div class="scrollx"><table class="props" id="slateProps"></table></div>
+    </div>
+    <p class="note">Each game uses its scheduled rest, the injury report and any edits you made on the Injuries / minutes tab. Edge = the model's probability on the better side of your line minus 52.4% (the break-even at −110).</p>
+  </section>
+
   <!-- PROJECTIONS -->
   <section id="tab-proj" class="pane">
     <div class="controls">
@@ -107,7 +143,7 @@
         <button id="btnCsv" title="Download every player's projections for every stat">Download CSV</button>
         <span class="dim">Type the sportsbook line to get the model's over/under probability and fair odds.</span>
       </div>
-      <table class="props" id="propTable"></table>
+      <div class="scrollx"><table class="props" id="propTable"></table></div>
     </div>
     <p class="note">Probabilities come from replaying the game possession by possession, over and over. The model is a simple simulation and hasn't been shown to beat the market. Treat a gap between the model and a line as a reason to dig in, not as a bet.</p>
   </section>

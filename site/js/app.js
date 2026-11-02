@@ -4,9 +4,23 @@
   const $ = (id) => document.getElementById(id);
 
   let model = null, cur = { away: null, home: null }, outSet = new Set(), minutes = {}, seed = 1, game = null;
+  const userOut = {}; // player id -> true (out) / false (in): your edits, kept across games and used by the slate
+  const defaultOutSet = () => new Set(NBASim.defaultOut(model, Object.keys(model.teams)));
+  let defOut = null;
+  function outFor(teams) {
+    const s = new Set();
+    for (const t of teams) for (const p of model.teams[t].players) {
+      const o = userOut[p.id] != null ? userOut[p.id] : defOut.has(p.id);
+      if (o) s.add(p.id);
+    }
+    return s;
+  }
   let idx = -1, playing = false, timer = null, speed = 1;
   let projResult = null, projStale = true, worker = null;
   const lines = {}; // user-entered prop lines: key `${id}|${stat}`
+  const gameLines = {}; // game id -> {spread, total}: market lines you typed (shared by Slate and Projections)
+  let curGameId = null;
+  let slate = null, slateWorker = null, slateStale = true;
   const players = {}; // id -> {name, short, team, pos}
   const colCache = {};
 
@@ -32,6 +46,7 @@
   // ---------------- boot ----------------
   fetch("data/model.json").then((r) => r.json()).then((m) => {
     model = m;
+    defOut = defaultOutSet();
     for (const t in m.teams) for (const p of m.teams[t].players) players[p.id] = { name: p.name, short: p.short, team: t, pos: p.pos };
     $("dataLine").textContent = `${m.season_label} season · data through ${fmtDate(m.through)} · built ${m.generated}`;
     initPicker();
@@ -66,7 +81,7 @@
     const dates = [...new Set(model.schedule.map((g) => g.date))];
     const def = defaultDate(), t = todayET();
     $("dateSel").innerHTML = dates.map((d) => `<option value="${d}" ${d === def ? "selected" : ""}>${fmtDay(d)}${d === t ? " (today)" : ""}</option>`).join("");
-    $("dateSel").onchange = renderGames;
+    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate") runSlate(); };
     const teams = Object.keys(model.teams).sort();
     const opts = teams.map((t) => `<option>${t}</option>`).join("");
     $("awaySel").innerHTML = opts; $("homeSel").innerHTML = opts;
@@ -105,14 +120,15 @@
     cur = { away: g.away, home: g.home };
     $("awaySel").value = g.away; $("homeSel").value = g.home;
     $("neutralChk").checked = !!g.neutral;
-    outSet = new Set(NBASim.defaultOut(model, [g.away, g.home]));
-    minutes = {};
+    outSet = outFor([g.away, g.home]);
     document.documentElement.style.setProperty("--away", col(g.away));
     document.documentElement.style.setProperty("--home", col(g.home));
     const sg = schedFor(g.away, g.home);
-    $("mSpread").value = sg && sg.home_spread != null ? sg.home_spread : "";
-    $("mTotal").value = sg && sg.total != null ? sg.total : "";
-    $("mktNote").textContent = sg && sg.home_spread != null ? "closing lines" : "";
+    curGameId = sg ? sg.id : null;
+    const gl = (sg && gameLines[sg.id]) || {};
+    $("mSpread").value = gl.spread != null ? gl.spread : sg && sg.home_spread != null ? sg.home_spread : "";
+    $("mTotal").value = gl.total != null ? gl.total : sg && sg.total != null ? sg.total : "";
+    $("mktNote").textContent = gl.spread == null && sg && sg.home_spread != null ? "closing lines" : "";
     $("spreadLbl").textContent = `${g.home} spread`;
     $("restAwayLbl").textContent = g.away; $("restHomeLbl").textContent = g.home;
     $("restAway").value = restCat(g.away, sg ? sg.date : g.date);
@@ -132,6 +148,7 @@
       document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
       document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-" + t.dataset.tab));
       if (t.dataset.tab === "proj" && projStale) runProjections();
+      if (t.dataset.tab === "slate" && (slateStale || !slate || slate.date !== $("dateSel").value)) runSlate();
     }));
   }
 
@@ -157,7 +174,17 @@
     };
     $("btnRun").onclick = runProjections;
     $("statSel").onchange = $("teamFilter").onchange = renderProps;
-    $("mSpread").onchange = $("mTotal").onchange = () => { $("mktNote").textContent = ""; if (projResult) renderProjections(); };
+    $("mSpread").onchange = $("mTotal").onchange = () => {
+      $("mktNote").textContent = "";
+      if (curGameId) gameLines[curGameId] = { spread: num($("mSpread").value), total: num($("mTotal").value) };
+      if (projResult) renderProjections();
+      if (slate) renderSlateGames();
+    };
+    $("btnSlate").onclick = runSlate;
+    $("slateStat").onchange = $("slateGame").onchange = $("slateSort").onchange = renderSlateProps;
+    $("slateSearch").oninput = renderSlateProps;
+    $("btnSlateCsv").onclick = slateCsv;
+    $("btnPaste").onclick = applyPaste;
     $("btnCsv").onclick = downloadCsv;
   }
   function fromHash() {
@@ -169,8 +196,13 @@
     return true;
   }
 
+  function teamMinutes(teams) {
+    const m = {};
+    for (const t of teams) for (const p of model.teams[t].players) if (minutes[p.id] != null) m[p.id] = minutes[p.id];
+    return m;
+  }
   function simOpts(extra) {
-    return Object.assign({ away: cur.away, home: cur.home, out: [...outSet], minutes, neutral: $("neutralChk").checked,
+    return Object.assign({ away: cur.away, home: cur.home, out: [...outSet], minutes: teamMinutes([cur.away, cur.home]), neutral: $("neutralChk").checked,
       rest: { away: $("restAway").value, home: $("restHome").value } }, extra);
   }
   function newGame(s) {
@@ -640,6 +672,7 @@
     $("propTable").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
       if (inp.value === "") delete lines[inp.dataset.key]; else lines[inp.dataset.key] = +inp.value;
       renderProps();
+      if (slate) renderSlateProps();
     }));
   }
   function downloadCsv() {
@@ -656,6 +689,198 @@
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `hardwood-sim_${cur.away}-at-${cur.home}_${projResult.n}sims.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ---------------- slate ----------------
+  const BREAK_EVEN = 0.5238; // -110
+  function slateOpts(g) {
+    const teams = [g.away, g.home];
+    return { away: g.away, home: g.home, out: [...outFor(teams)], minutes: teamMinutes(teams), neutral: !!g.neutral,
+      rest: { away: restCat(g.away, g.date), home: restCat(g.home, g.date) }, seed: 12345 };
+  }
+  function runSlate() {
+    if (!model) return;
+    const date = $("dateSel").value, games = model.schedule.filter((g) => g.date === date && model.teams[g.away] && model.teams[g.home]);
+    if (!games.length) { $("slateInfo").textContent = "No games on this date."; $("slateOut").classList.add("hidden"); return; }
+    const n = +$("slateN").value, t0 = performance.now();
+    const run = { date, n, games: [] };
+    slate = run; slateStale = false;
+    $("btnSlate").disabled = true; $("slateProg").style.width = "0%";
+    let k = 0;
+    const finish = () => {
+      $("btnSlate").disabled = false; $("slateProg").style.width = "100%";
+      $("slateInfo").textContent = `${games.length} games × ${n.toLocaleString()} sims in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${fmtDay(date)}`;
+      renderSlate();
+    };
+    const store = (g, opts, res) => { if (slate === run) run.games.push({ g, opts, res }); };
+    const next = () => {
+      if (slate !== run) return; // a newer run started
+      if (k >= games.length) return finish();
+      const g = games[k], opts = slateOpts(g);
+      $("slateInfo").textContent = `simulating ${g.away} @ ${g.home} (${k + 1} of ${games.length})…`;
+      try {
+        if (!slateWorker) { slateWorker = new Worker("js/worker.js"); slateWorker.postMessage({ model }); }
+        slateWorker.onmessage = (e) => {
+          if (e.data.progress != null) $("slateProg").style.width = (((k + e.data.progress) / games.length) * 100).toFixed(0) + "%";
+          if (e.data.done) { store(g, opts, e.data.result); k++; next(); }
+        };
+        slateWorker.postMessage({ run: true, opts, n });
+      } catch (err) { // no workers: main thread, one game at a time
+        setTimeout(() => { store(g, opts, NBASim.summarize(NBASim.simulateMany(model, opts, n))); k++; $("slateProg").style.width = ((k / games.length) * 100).toFixed(0) + "%"; next(); }, 20);
+      }
+    };
+    next();
+  }
+  function renderSlate() {
+    $("slateGame").innerHTML = `<option value="">All games</option>` + slate.games.map((x, i) => `<option value="${i}">${x.g.away} @ ${x.g.home}</option>`).join("");
+    $("slateOut").classList.remove("hidden");
+    renderSlateGames();
+    renderSlateProps();
+  }
+  function renderSlateGames() {
+    if (!slate) return;
+    const head = `<tr><th>Game</th><th>Tip</th><th>Proj score</th><th>Win %</th><th>Fair ML</th><th>Fair spread</th><th title="Sportsbook spread for the home team, e.g. -4.5">Home spread</th><th>Cover</th><th>Proj total</th><th>Market total</th><th>Over / under</th></tr>`;
+    $("slateGames").innerHTML = head + slate.games.map((x, i) => {
+      const { g, res: r, opts } = x, n = r.n, A = g.away, H = g.home;
+      const margin = Array.from(r.home, (h, j) => h - r.away[j]), total = Array.from(r.home, (h, j) => h + r.away[j]);
+      const pH = r.wins.home / n, pA = 1 - pH;
+      const mSorted = [...margin].sort((a, b) => a - b);
+      const gl = gameLines[g.id] || {};
+      const sp = gl.spread != null ? gl.spread : g.home_spread, tl = gl.total != null ? gl.total : g.total;
+      let cover = "", over = "";
+      if (sp != null) { const c = margin.filter((m) => m + sp > 0).length / n, u = margin.filter((m) => m + sp < 0).length / n; cover = edgeCell(c, u, `${H}`, `${A}`); }
+      if (tl != null) { const o = total.filter((t) => t > tl).length / n, u = total.filter((t) => t < tl).length / n; over = edgeCell(o, u, "O", "U"); }
+      const tag = (t, side) => (opts.rest[side] === "b2b" ? `<span class="tag">B2B</span>` : "");
+      const tip = g.home_score != null ? `<span class="dim">final ${g.away_score}-${g.home_score}</span>` : tipTime(g.start);
+      return `<tr><td data-i="${i}"><span class="teamtag" style="background:${col(A)}"></span>${A}${tag(A, "away")} @ <span class="teamtag" style="background:${col(H)}"></span>${H}${tag(H, "home")}</td>
+        <td>${tip}</td><td>${meanOf(r.away).toFixed(1)}–${meanOf(r.home).toFixed(1)}</td><td>${pct(pA)} / ${pct(pH)}</td><td>${american(pA)} / ${american(pH)}</td>
+        <td>${H} ${fmtLine(-quant(mSorted, 0.5))}</td>
+        <td><input data-g="${g.id}" data-k="spread" type="number" step="0.5" value="${sp != null ? sp : ""}" placeholder="${H}"></td><td>${cover}</td>
+        <td>${meanOf(total).toFixed(1)}</td>
+        <td><input data-g="${g.id}" data-k="total" type="number" step="0.5" value="${tl != null ? tl : ""}"></td><td>${over}</td></tr>`;
+    }).join("");
+    $("slateGames").querySelectorAll("td[data-i]").forEach((td) => (td.onclick = () => openFromSlate(+td.dataset.i)));
+    $("slateGames").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
+      const gl = gameLines[inp.dataset.g] || (gameLines[inp.dataset.g] = {});
+      gl[inp.dataset.k] = num(inp.value);
+      if (inp.dataset.g === curGameId) { $("mSpread").value = gl.spread != null ? gl.spread : ""; $("mTotal").value = gl.total != null ? gl.total : ""; if (projResult) renderProjections(); }
+      renderSlateGames();
+    }));
+  }
+  function edgeCell(p1, p2, l1, l2) {
+    const best = p1 >= p2 ? [p1, l1] : [p2, l2];
+    const cls = best[0] >= 0.56 ? "edge-hi" : "";
+    return `<span class="${cls}">${l1} ${pct(p1)}</span> <span class="dim">· ${l2} ${pct(p2)}</span>`;
+  }
+  function openFromSlate(i) {
+    const x = slate.games[i];
+    $("dateSel").value = x.g.date;
+    selectGame(x.g);
+    const n = String(slate.n);
+    if (![...$("nSel").options].some((o) => o.value === n)) $("nSel").insertAdjacentHTML("afterbegin", `<option>${n}</option>`);
+    $("nSel").value = n;
+    projResult = x.res; projStale = false;
+    $("runInfo").textContent = `from the slate run · ${x.res.n.toLocaleString()} games`;
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "proj"));
+    document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-proj"));
+    renderProjections();
+    window.scrollTo(0, 0);
+  }
+  function slateRows(k, gi, q) {
+    const rows = [];
+    slate.games.forEach((x, i) => {
+      if (gi !== "" && +gi !== i) return;
+      for (const p of Object.values(x.res.players)) {
+        const d = p.d[k], m = meanOf(d), min = meanOf(p.d.min);
+        if (min < 8 || m < MIN_MEAN[k]) continue;
+        if (q && !normName(p.name).includes(q)) continue;
+        rows.push({ p, d, m, min, opp: p.team === x.g.away ? x.g.home : x.g.away, home: p.team === x.g.home });
+      }
+    });
+    return rows;
+  }
+  function lineInfo(p, k, d, m) {
+    const key = p.id + "|" + k, user = lines[key] != null;
+    const line = user ? lines[key] : Math.floor(m) + 0.5;
+    const o = pOver(d, line), u = pUnder(d, line);
+    const edge = user ? Math.max(o, u) - BREAK_EVEN : null;
+    return { key, user, line, o, u, edge, side: o >= u ? "O" : "U" };
+  }
+  function renderSlateProps() {
+    if (!slate) return;
+    const k = $("slateStat").value, gi = $("slateGame").value, q = normName($("slateSearch").value || "");
+    let rows = slateRows(k, gi, q);
+    const nameCell = (x) => `<td>${x.p.name}<span class="pos">${x.p.pos}</span></td><td><span class="teamtag" style="background:${col(x.p.team)}"></span>${x.p.team} <span class="dim">${x.home ? "vs" : "@"} ${x.opp}</span></td>`;
+    if (k === "dd" || k === "td") {
+      rows.sort((a, b) => b.m - a.m);
+      $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Probability</th><th>Fair yes</th><th>Fair no</th></tr>` +
+        rows.map((x) => `<tr>${nameCell(x)}<td>${x.min.toFixed(1)}</td><td>${pct(x.m)}</td><td>${american(x.m)}</td><td>${american(1 - x.m)}</td></tr>`).join("");
+      return;
+    }
+    rows.forEach((x) => (x.li = lineInfo(x.p, k, x.d, x.m)));
+    if ($("slateSort").value === "edge") rows.sort((a, b) => (b.li.edge != null) - (a.li.edge != null) || (b.li.edge || 0) - (a.li.edge || 0) || b.m - a.m);
+    else rows.sort((a, b) => b.m - a.m);
+    $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th><th>Edge</th></tr>` +
+      rows.map((x) => {
+        const L = x.li, oc = L.user && L.o >= 0.56 ? "edge-hi" : "", uc = L.user && L.u >= 0.56 ? "edge-lo" : "";
+        const e = L.edge == null ? "" : `<span class="${L.edge > 0.035 ? (L.side === "O" ? "edge-hi" : "edge-lo") : L.edge > 0 ? "" : "dim"}">${L.edge > 0 ? "+" : ""}${(L.edge * 100).toFixed(1)}% ${L.side}</span>`;
+        return `<tr>${nameCell(x)}<td>${x.min.toFixed(1)}</td><td>${x.m.toFixed(1)}</td><td>${quant(x.d, 0.5)}</td><td>${quant(x.d, 0.1)}–${quant(x.d, 0.9)}</td>
+          <td><input data-key="${L.key}" type="number" step="0.5" value="${L.line}"></td>
+          <td class="${oc}">${pct(L.o)}</td><td class="${uc}">${pct(L.u)}</td><td>${american(L.o)}</td><td>${american(L.u)}</td><td>${e}</td></tr>`;
+      }).join("");
+    $("slateProps").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
+      if (inp.value === "") delete lines[inp.dataset.key]; else lines[inp.dataset.key] = +inp.value;
+      renderSlateProps();
+      if (projResult) renderProps();
+    }));
+  }
+  const normName = (x) => String(x).normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+  const STAT_ALIAS = { pts: "pts", points: "pts", point: "pts", reb: "reb", rebs: "reb", rebounds: "reb", ast: "ast", asts: "ast", assists: "ast",
+    "3pm": "fg3m", "3s": "fg3m", threes: "fg3m", "3pt": "fg3m", fg3m: "fg3m", "3ptm": "fg3m", pra: "pra", "p+r+a": "pra", "pts+reb+ast": "pra",
+    pr: "pr", "p+r": "pr", "pts+reb": "pr", pa: "pa", "p+a": "pa", "pts+ast": "pa", ra: "ra", "r+a": "ra", "reb+ast": "ra",
+    stl: "stl", steals: "stl", blk: "blk", blocks: "blk", stocks: "stocks", "s+b": "stocks", "stl+blk": "stocks", tov: "tov", to: "tov", turnovers: "tov", min: "min", minutes: "min" };
+  function findPlayer(name) {
+    const q = normName(name);
+    if (!q) return null;
+    const inSlate = new Set(slate ? slate.games.flatMap((x) => [x.g.away, x.g.home]) : []);
+    const all = Object.entries(players).map(([id, p]) => ({ id, ...p, n: normName(p.name) }));
+    const pool = (f) => { const a = all.filter(f); const s = a.filter((p) => inSlate.has(p.team)); return s.length ? s : a; };
+    let m = pool((p) => p.n === q);
+    if (m.length !== 1) m = pool((p) => p.n.includes(q) || q.includes(p.n));
+    if (m.length !== 1) { const last = q.split(" ").pop(); m = pool((p) => p.n.split(" ").includes(last) && p.n[0] === q[0]); }
+    return m.length === 1 ? m[0] : null;
+  }
+  function applyPaste() {
+    let ok = 0; const bad = [];
+    for (const raw of $("pasteBox").value.split(/\n/)) {
+      const line = raw.trim();
+      if (!line) continue;
+      const parts = line.split(/\s*[,\t|]\s*/);
+      if (parts.length < 3) { bad.push(line); continue; }
+      const val = parseFloat(parts[parts.length - 1]), st = STAT_ALIAS[parts[parts.length - 2].toLowerCase().replace(/\s/g, "")];
+      const p = findPlayer(parts.slice(0, parts.length - 2).join(" "));
+      if (!p || !st || isNaN(val)) { bad.push(line); continue; }
+      lines[p.id + "|" + st] = val; ok++;
+    }
+    $("pasteInfo").textContent = `${ok} line${ok === 1 ? "" : "s"} applied` + (bad.length ? ` · couldn't read: ${bad.slice(0, 4).join("; ")}${bad.length > 4 ? "…" : ""}` : "");
+    if (ok) { $("slateSort").value = "edge"; renderSlateProps(); if (projResult) renderProps(); }
+  }
+  function slateCsv() {
+    if (!slate) return;
+    const stats = ["pts", "reb", "ast", "fg3m", "pra", "pr", "pa", "ra", "stl", "blk", "stocks", "tov", "min", "dd", "td"];
+    const out = [["date", "game", "player", "team", "opp", "stat", "mean", "median", "p10", "p90", "line", "your_line", "over", "under", "fair_over", "fair_under", "edge"].join(",")];
+    for (const k of stats) for (const x of slateRows(k, "", "")) {
+      const yn = k === "dd" || k === "td";
+      const L = yn ? { line: 0.5, user: false, o: pOver(x.d, 0.5), u: pUnder(x.d, 0.5), edge: null } : lineInfo(x.p, k, x.d, x.m);
+      const g = x.home ? `${x.opp}@${x.p.team}` : `${x.p.team}@${x.opp}`;
+      out.push([slate.date, g, `"${x.p.name}"`, x.p.team, x.opp, k, x.m.toFixed(3), quant(x.d, 0.5), quant(x.d, 0.1), quant(x.d, 0.9), L.line, L.user ? "yes" : "", L.o.toFixed(4), L.u.toFixed(4), american(L.o), american(L.u), L.edge == null ? "" : L.edge.toFixed(4)].join(","));
+    }
+    const blob = new Blob([out.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `hardwood-sim_slate_${slate.date}_${slate.n}sims.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
@@ -682,9 +907,19 @@
           <span class="${(p.d || 0) >= 1 ? "dpos" : (p.d || 0) <= -1 ? "dneg" : ""}">${(p.d || 0) > 0 ? "+" : ""}${(p.d || 0).toFixed(1)}</span></label>`;
         }).join("") + "</div>";
     };
-    $("rosters").innerHTML = block(cur.away) + block(cur.home);
+    const nEdits = [cur.away, cur.home].reduce((a, t) => a + model.teams[t].players.filter((p) => userOut[p.id] != null || minutes[p.id] != null).length, 0);
+    $("rosters").innerHTML = block(cur.away) + block(cur.home) +
+      `<div class="resetrow">${nEdits ? `<span class="dim">${nEdits} edit${nEdits > 1 ? "s" : ""} for these teams (kept when you switch games and used by the Slate tab).</span> <button id="btnResetRoster">Reset to model</button>` : ""}</div>`;
+    if ($("btnResetRoster")) $("btnResetRoster").onclick = () => {
+      for (const t of [cur.away, cur.home]) for (const p of model.teams[t].players) { delete userOut[p.id]; delete minutes[p.id]; }
+      outSet = outFor([cur.away, cur.home]);
+      changed();
+    };
     $("rosters").querySelectorAll("input[type=checkbox]").forEach((c) => (c.onchange = () => {
-      if (c.checked) outSet.delete(c.dataset.id); else { outSet.add(c.dataset.id); delete minutes[c.dataset.id]; }
+      const id = c.dataset.id, wantOut = !c.checked;
+      if (wantOut === defOut.has(id)) delete userOut[id]; else userOut[id] = wantOut;
+      if (wantOut) delete minutes[id];
+      outSet = outFor([cur.away, cur.home]);
       changed();
     }));
     $("rosters").querySelectorAll("input[data-min]").forEach((c) => (c.onchange = () => {
@@ -694,6 +929,7 @@
   }
   function changed() {
     projStale = true;
+    slateStale = true;
     renderRoster();
     newGame(seed);
   }

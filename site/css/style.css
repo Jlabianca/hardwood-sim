@@ -26,7 +26,7 @@ button.primary { background: var(--accent); color: #1f0d02; border-color: var(--
 
 .picker { padding: 12px 22px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--line); background: var(--panel); }
 .games { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
-.games button { font: 12px var(--mono); padding: 5px 8px; }
+.games button { font: 12px var(--mono); padding: 5px 8px; white-space: nowrap; }
 .games button.sel { border-color: var(--accent); color: var(--accent); }
 .games button .fin { color: var(--dim); }
 .custom { display: flex; gap: 6px; align-items: center; }
@@ -130,9 +130,25 @@ table.props input { width: 74px; text-align: right; padding: 3px 6px; }
 .rosters .st { color: var(--bad); font-size: 11px; }
 .rosters label.off { opacity: .5; }
 
+.resetrow { grid-column: 1 / -1; display: flex; gap: 10px; align-items: center; font-size: 12px; }
+.sec { margin: 4px 0 8px; font: 600 12px var(--mono); letter-spacing: .08em; color: var(--dim); text-transform: uppercase; }
+.sec .dim { text-transform: none; letter-spacing: 0; font-weight: 400; }
+table.slategames td:first-child { cursor: pointer; }
+table.slategames td:first-child:hover { color: var(--accent); }
+table.slategames .tag { color: var(--bad); font-size: 10px; margin-left: 3px; }
+#slateSearch { width: 150px; }
+details.paste { margin: 0 0 12px; font-size: 13px; }
+details.paste summary { cursor: pointer; color: var(--blue); }
+details.paste textarea { width: 100%; max-width: 620px; font: 12px var(--mono); color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+td.edge-hi, td.edge-lo { white-space: nowrap; }
+.scrollx { overflow-x: auto; }
+.scrollx table.props { min-width: 860px; }
 footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--line); margin-top: 20px; }
 
 @media (max-width: 860px) {
+  .picker { flex-direction: column; align-items: stretch; gap: 10px; padding: 10px 14px; }
+  .custom { flex-wrap: wrap; }
+  main { padding: 14px; }
   .board { grid-template-columns: 1fr 100px; }
   .situation { grid-column: 1 / -1; justify-content: flex-start; }
   .fieldwrap, .charts, .rosters, .boxgrid { grid-template-columns: 1fr; }
