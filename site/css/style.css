@@ -143,6 +143,17 @@ details.paste textarea { width: 100%; max-width: 620px; font: 12px var(--mono); 
 td.edge-hi, td.edge-lo { white-space: nowrap; }
 .scrollx { overflow-x: auto; }
 .scrollx table.props { min-width: 860px; }
+.sgp { margin-top: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.sgpadd { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.sgpadd input { width: 80px; }
+.sgpbook { margin-top: 10px; font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.sgpbook input { width: 110px; }
+table.sgplegs { min-width: 600px !important; margin-bottom: 10px; }
+table.sgplegs td:nth-child(2), table.sgplegs th:nth-child(2) { text-align: left; }
+button.x { padding: 1px 8px; color: var(--bad); }
+button.add { padding: 1px 6px; font-size: 11px; margin-left: 2px; }
+.lift-hi { color: var(--good); } .lift-lo { color: var(--bad); }
+.toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel2); border: 1px solid var(--accent); color: var(--text); padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 9; }
 footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--line); margin-top: 20px; }
 
 @media (max-width: 860px) {

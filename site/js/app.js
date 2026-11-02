@@ -185,6 +185,7 @@
     $("slateSearch").oninput = renderSlateProps;
     $("btnSlateCsv").onclick = slateCsv;
     $("btnPaste").onclick = applyPaste;
+    initSgp();
     $("btnCsv").onclick = downloadCsv;
   }
   function fromHash() {
@@ -619,6 +620,8 @@
     $("teamFilter").innerHTML = `<option value="">Both</option><option>${A}</option><option>${H}</option>`;
     $("projOut").classList.remove("hidden");
     renderProps();
+    sgpFillPlayers();
+    renderSgp();
   }
   const fmtLine = (x) => (x > 0 ? "+" + x : x === 0 ? "PK" : String(x));
 
@@ -652,12 +655,18 @@
     const k = $("statSel").value, tf = $("teamFilter").value;
     const rows = propRows(k, tf);
     const nameCell = (p) => `<td>${p.name}<span class="pos">${p.pos}</span></td><td><span class="teamtag" style="background:${col(p.team)}"></span>${p.team}</td>`;
+    const addBtns = (id, line, yn) => `<td><button class="add" data-id="${id}" data-side="o" data-line="${line}">${yn ? "Yes" : "O"}</button><button class="add" data-id="${id}" data-side="u" data-line="${line}">${yn ? "No" : "U"}</button></td>`;
+    const wireAdd = (tbl) => tbl.querySelectorAll("button.add").forEach((b) => (b.onclick = () => {
+      const inp = b.closest("tr").querySelector("input");
+      addLeg(sgpKey(), { type: "prop", id: b.dataset.id, stat: k, side: b.dataset.side, line: inp ? +inp.value : +b.dataset.line });
+    }));
     if (k === "dd" || k === "td") {
-      $("propTable").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Probability</th><th>Fair yes</th><th>Fair no</th></tr>` +
-        rows.map(({ p, m, min }) => `<tr>${nameCell(p)}<td>${min.toFixed(1)}</td><td>${pct(m)}</td><td>${american(m)}</td><td>${american(1 - m)}</td></tr>`).join("");
+      $("propTable").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Probability</th><th>Fair yes</th><th>Fair no</th><th>Parlay</th></tr>` +
+        rows.map(({ p, m, min }) => `<tr>${nameCell(p)}<td>${min.toFixed(1)}</td><td>${pct(m)}</td><td>${american(m)}</td><td>${american(1 - m)}</td>${addBtns(p.id, 0.5, true)}</tr>`).join("");
+      wireAdd($("propTable"));
       return;
     }
-    $("propTable").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th></tr>` +
+    $("propTable").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th><th>Parlay</th></tr>` +
       rows.map(({ p, d, m, min }) => {
         const key = p.id + "|" + k;
         const med = quant(d, 0.5);
@@ -667,8 +676,9 @@
         const oc = user && o >= 0.56 ? "edge-hi" : "", uc = user && u >= 0.56 ? "edge-lo" : "";
         return `<tr>${nameCell(p)}<td>${min.toFixed(1)}</td><td>${m.toFixed(1)}</td><td>${med}</td><td>${quant(d, 0.1)}–${quant(d, 0.9)}</td>
           <td><input data-key="${key}" type="number" step="0.5" value="${line}"></td>
-          <td class="${oc}">${pct(o)}</td><td class="${uc}">${pct(u)}</td><td>${american(o)}</td><td>${american(u)}</td></tr>`;
+          <td class="${oc}">${pct(o)}</td><td class="${uc}">${pct(u)}</td><td>${american(o)}</td><td>${american(u)}</td>${addBtns(p.id, line, false)}</tr>`;
       }).join("");
+    wireAdd($("propTable"));
     $("propTable").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
       if (inp.value === "") delete lines[inp.dataset.key]; else lines[inp.dataset.key] = +inp.value;
       renderProps();
@@ -691,6 +701,121 @@
     a.download = `hardwood-sim_${cur.away}-at-${cur.home}_${projResult.n}sims.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  // ---------------- same-game parlay ----------------
+  const sgpByGame = {}; // "AWAY@HOME" -> legs
+  const STAT_LBL = { pts: "points", reb: "rebounds", ast: "assists", fg3m: "3-pointers", pra: "pts+reb+ast", pr: "pts+reb", pa: "pts+ast", ra: "reb+ast",
+    stl: "steals", blk: "blocks", stocks: "steals+blocks", tov: "turnovers", min: "minutes", dd: "double-double", td: "triple-double" };
+  const sgpKey = (a, h) => `${a || cur.away}@${h || cur.home}`;
+  const legsFor = (key) => sgpByGame[key] || (sgpByGame[key] = []);
+  function toast(msg) {
+    let t = document.querySelector(".toast");
+    if (!t) { t = document.createElement("div"); t.className = "toast"; document.body.appendChild(t); }
+    t.textContent = msg; t.style.display = "block";
+    clearTimeout(t._h); t._h = setTimeout(() => (t.style.display = "none"), 1800);
+  }
+  function addLeg(key, leg) {
+    const L = legsFor(key);
+    const same = (a, b) => a.type === b.type && a.id === b.id && a.stat === b.stat && (a.type !== "ml" || a.side === b.side);
+    const i = L.findIndex((x) => same(x, leg));
+    if (i >= 0) L[i] = leg; else L.push(leg);
+    if (key === sgpKey()) renderSgp();
+    toast(`Added to ${key.replace("@", " @ ")} parlay: ${legText(leg)}`);
+  }
+  function legText(l) {
+    if (l.type === "prop") {
+      const nm_ = players[l.id] ? players[l.id].name : "?";
+      if (l.stat === "dd" || l.stat === "td") return `${nm_} ${STAT_LBL[l.stat]}: ${l.side === "u" ? "No" : "Yes"}`;
+      return `${nm_} ${l.side === "o" ? "over" : "under"} ${l.line} ${STAT_LBL[l.stat]}`;
+    }
+    const team = l.side === "home" ? cur.home : cur.away;
+    if (l.type === "ml") return `${team} to win`;
+    if (l.type === "spread") return `${team} ${fmtLine(l.line)}`;
+    return `${l.side === "o" ? "Over" : "Under"} ${l.line} total points`;
+  }
+  function sgpForm() {
+    const t = $("sgpType").value, st = $("sgpStat").value, yn = st === "dd" || st === "td";
+    $("sgpPlayer").style.display = $("sgpStat").style.display = t === "prop" ? "" : "none";
+    $("sgpTeam").style.display = t === "ml" || t === "spread" ? "" : "none";
+    $("sgpLine").style.display = t === "ml" || (t === "prop" && yn) ? "none" : "";
+    $("sgpSide").style.display = t === "ml" || t === "spread" ? "none" : "";
+    const want = t === "prop" && yn ? `<option value="o">Yes</option><option value="u">No</option>` : `<option value="o">Over</option><option value="u">Under</option>`;
+    if ($("sgpSide").innerHTML !== want) $("sgpSide").innerHTML = want;
+    if (!projResult) return;
+    // sensible default line
+    if (t === "prop" && !yn) {
+      const id = $("sgpPlayer").value, P = projResult.players[id];
+      if (P) $("sgpLine").value = lines[id + "|" + st] != null ? lines[id + "|" + st] : Math.floor(meanOf(P.d[st])) + 0.5;
+    } else if (t === "spread") {
+      const sp = num($("mSpread").value), home = $("sgpTeam").value === "home";
+      if (sp != null) $("sgpLine").value = home ? sp : -sp;
+      else { const m = meanOf(Array.from(projResult.home, (h, i) => h - projResult.away[i])); const fair = Math.round(m) + 0.5; $("sgpLine").value = home ? -fair : fair; }
+    } else if (t === "total") {
+      const tl = num($("mTotal").value);
+      $("sgpLine").value = tl != null ? tl : Math.floor(meanOf(Array.from(projResult.home, (h, i) => h + projResult.away[i]))) + 0.5;
+    }
+  }
+  function sgpFillPlayers() {
+    const ps = Object.values(projResult.players).map((p) => ({ p, min: meanOf(p.d.min) })).filter((x) => x.min >= 3)
+      .sort((a, b) => (a.p.team === cur.away ? 0 : 1) - (b.p.team === cur.away ? 0 : 1) || b.min - a.min);
+    const keep = $("sgpPlayer").value;
+    $("sgpPlayer").innerHTML = ps.map((x) => `<option value="${x.p.id}">${x.p.team} · ${x.p.name}</option>`).join("");
+    if (keep && ps.some((x) => x.p.id === keep)) $("sgpPlayer").value = keep;
+    $("sgpTeam").innerHTML = `<option value="away">${cur.away}</option><option value="home">${cur.home}</option>`;
+    sgpForm();
+  }
+  function initSgp() {
+    $("sgpType").onchange = $("sgpStat").onchange = $("sgpPlayer").onchange = $("sgpTeam").onchange = sgpForm;
+    $("btnSgpAdd").onclick = () => {
+      const t = $("sgpType").value, line = num($("sgpLine").value), side = $("sgpSide").value;
+      let leg;
+      if (t === "prop") { const st = $("sgpStat").value; leg = { type: "prop", id: $("sgpPlayer").value, stat: st, side, line: st === "dd" || st === "td" ? 0.5 : line }; }
+      else if (t === "ml") leg = { type: "ml", side: $("sgpTeam").value };
+      else if (t === "spread") leg = { type: "spread", side: $("sgpTeam").value, line };
+      else leg = { type: "total", side, line };
+      if (leg.line == null && t !== "ml") { toast("Enter a line first"); return; }
+      addLeg(sgpKey(), leg);
+    };
+    $("btnSgpClear").onclick = () => { sgpByGame[sgpKey()] = []; renderSgp(); };
+    $("sgpBook").oninput = renderSgp;
+  }
+  function renderSgp() {
+    if (!projResult) return;
+    const legs = legsFor(sgpKey());
+    if (!legs.length) {
+      $("sgpLegs").innerHTML = `<tr><td class="dim" style="text-align:left">No legs yet. Pick one above, or use the O / U buttons in the props table.</td></tr>`;
+      $("sgpCards").innerHTML = ""; $("sgpEv").textContent = "";
+      return;
+    }
+    const e = SGP.evaluate(legs, projResult);
+    const anyPush = e.legs.some((x) => x.push > 0);
+    $("sgpLegs").innerHTML = `<tr><th>#</th><th>Leg</th><th>Model</th><th>Fair odds</th>${anyPush ? "<th>Push</th>" : ""}<th></th></tr>` +
+      legs.map((l, i) => {
+        const out = l.type === "prop" && !projResult.players[l.id];
+        return `<tr><td>${i + 1}</td><td>${legText(l)}${out ? ' <span class="st">(marked out)</span>' : ""}</td><td>${pct(e.legs[i].p)}</td><td>${american(e.legs[i].p)}</td>${anyPush ? `<td>${e.legs[i].push ? pct(e.legs[i].push) : ""}</td>` : ""}<td><button class="x" data-i="${i}" title="remove">×</button></td></tr>`;
+      }).join("");
+    $("sgpLegs").querySelectorAll("button.x").forEach((b) => (b.onclick = () => { legs.splice(+b.dataset.i, 1); renderSgp(); }));
+    const lift = e.lift;
+    const liftTxt = lift == null ? "–" : `${lift.toFixed(2)}×`;
+    const liftSub = lift == null ? "" : lift >= 1.05 ? "legs help each other" : lift <= 0.95 ? "legs work against each other" : "about independent";
+    const cards = [
+      ["All legs hit", pct(e.joint), `±${(e.se * 100).toFixed(1)}% · ${e.hits.toLocaleString()} of ${e.n.toLocaleString()} sims`],
+      ["Fair parlay odds", american(e.joint), e.joint > 0 ? `decimal ${(1 / e.joint).toFixed(2)}` : ""],
+      ["If legs were independent", pct(e.indep), `fair ${american(e.indep)}`],
+      ["Correlation", `<span class="${lift >= 1.05 ? "lift-hi" : lift <= 0.95 ? "lift-lo" : ""}">${liftTxt}</span>`, liftSub],
+    ];
+    $("sgpCards").innerHTML = cards.map(([k, v, s2]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s2}</div></div>`).join("");
+    const D = SGP.toDecimal($("sgpBook").value);
+    let ev = "";
+    if (D) {
+      const be = 1 / D, edge = e.joint * D - 1;
+      ev = `Book implies ${pct(be)} · model ${pct(e.joint)} · <b class="${edge > 0 ? "edge-hi" : "edge-lo"}">EV ${edge >= 0 ? "+" : "−"}$${Math.abs(edge * 100).toFixed(0)} per $100</b>`;
+      if (e.hits < 40) ev += ` <span class="dim">(only ${e.hits} hits in the sims: run more simulations for a steadier number)</span>`;
+      else if (Math.abs(e.joint - be) < 2 * e.se) ev += ` <span class="dim">— within simulation noise at ${e.n.toLocaleString()} sims; try 10,000+ before trusting it</span>`;
+    } else if ($("sgpBook").value) ev = `<span class="dim">Enter American (+450, -120) or decimal (5.5) odds.</span>`;
+    if (anyPush) ev += ` <span class="dim">Pushes count as not hitting; use half-point lines to avoid them.</span>`;
+    $("sgpEv").innerHTML = ev;
   }
 
   // ---------------- slate ----------------
@@ -808,6 +933,16 @@
     const edge = user ? Math.max(o, u) - BREAK_EVEN : null;
     return { key, user, line, o, u, edge, side: o >= u ? "O" : "U" };
   }
+  const slateAdd = (x, line, yn) => {
+    const key = x.home ? `${x.opp}@${x.p.team}` : `${x.p.team}@${x.opp}`;
+    return `<td><button class="add" data-g="${key}" data-id="${x.p.id}" data-side="o" data-line="${line}">${yn ? "Yes" : "O"}</button><button class="add" data-g="${key}" data-id="${x.p.id}" data-side="u" data-line="${line}">${yn ? "No" : "U"}</button></td>`;
+  };
+  function wireSlateAdd(k) {
+    $("slateProps").querySelectorAll("button.add").forEach((b) => (b.onclick = () => {
+      const inp = b.closest("tr").querySelector("input");
+      addLeg(b.dataset.g, { type: "prop", id: b.dataset.id, stat: k, side: b.dataset.side, line: inp ? +inp.value : +b.dataset.line });
+    }));
+  }
   function renderSlateProps() {
     if (!slate) return;
     const k = $("slateStat").value, gi = $("slateGame").value, q = normName($("slateSearch").value || "");
@@ -815,21 +950,23 @@
     const nameCell = (x) => `<td>${x.p.name}<span class="pos">${x.p.pos}</span></td><td><span class="teamtag" style="background:${col(x.p.team)}"></span>${x.p.team} <span class="dim">${x.home ? "vs" : "@"} ${x.opp}</span></td>`;
     if (k === "dd" || k === "td") {
       rows.sort((a, b) => b.m - a.m);
-      $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Probability</th><th>Fair yes</th><th>Fair no</th></tr>` +
-        rows.map((x) => `<tr>${nameCell(x)}<td>${x.min.toFixed(1)}</td><td>${pct(x.m)}</td><td>${american(x.m)}</td><td>${american(1 - x.m)}</td></tr>`).join("");
+      $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Probability</th><th>Fair yes</th><th>Fair no</th><th>Parlay</th></tr>` +
+        rows.map((x) => `<tr>${nameCell(x)}<td>${x.min.toFixed(1)}</td><td>${pct(x.m)}</td><td>${american(x.m)}</td><td>${american(1 - x.m)}</td>${slateAdd(x, 0.5, true)}</tr>`).join("");
+      wireSlateAdd(k);
       return;
     }
     rows.forEach((x) => (x.li = lineInfo(x.p, k, x.d, x.m)));
     if ($("slateSort").value === "edge") rows.sort((a, b) => (b.li.edge != null) - (a.li.edge != null) || (b.li.edge || 0) - (a.li.edge || 0) || b.m - a.m);
     else rows.sort((a, b) => b.m - a.m);
-    $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th><th>Edge</th></tr>` +
+    $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th><th>Edge</th><th>Parlay</th></tr>` +
       rows.map((x) => {
         const L = x.li, oc = L.user && L.o >= 0.56 ? "edge-hi" : "", uc = L.user && L.u >= 0.56 ? "edge-lo" : "";
         const e = L.edge == null ? "" : `<span class="${L.edge > 0.035 ? (L.side === "O" ? "edge-hi" : "edge-lo") : L.edge > 0 ? "" : "dim"}">${L.edge > 0 ? "+" : ""}${(L.edge * 100).toFixed(1)}% ${L.side}</span>`;
         return `<tr>${nameCell(x)}<td>${x.min.toFixed(1)}</td><td>${x.m.toFixed(1)}</td><td>${quant(x.d, 0.5)}</td><td>${quant(x.d, 0.1)}–${quant(x.d, 0.9)}</td>
           <td><input data-key="${L.key}" type="number" step="0.5" value="${L.line}"></td>
-          <td class="${oc}">${pct(L.o)}</td><td class="${uc}">${pct(L.u)}</td><td>${american(L.o)}</td><td>${american(L.u)}</td><td>${e}</td></tr>`;
+          <td class="${oc}">${pct(L.o)}</td><td class="${uc}">${pct(L.u)}</td><td>${american(L.o)}</td><td>${american(L.u)}</td><td>${e}</td>${slateAdd(x, L.line, false)}</tr>`;
       }).join("");
+    wireSlateAdd(k);
     $("slateProps").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
       if (inp.value === "") delete lines[inp.dataset.key]; else lines[inp.dataset.key] = +inp.value;
       renderSlateProps();

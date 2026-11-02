@@ -497,7 +497,10 @@
       d.dd = mk((i) => (cats(i) >= 2 ? 1 : 0));
       d.td = mk((i) => (cats(i) >= 3 ? 1 : 0));
       for (const k in d) d[k].sort();
-      players[id] = { id, name: p.name, short: p.short, pos: p.pos, team: p.team, d };
+      // unsorted per-game results, aligned across players and teams: game g is the same simulated game everywhere
+      const raw = {};
+      for (const k of ["min", "pts", "reb", "ast", "fg3m", "stl", "blk", "tov"]) raw[k] = s[k];
+      players[id] = { id, name: p.name, short: p.short, pos: p.pos, team: p.team, d, raw };
     }
     return { n, away: agg.away, home: agg.home, away1h: agg.away1h, home1h: agg.home1h, ot: agg.ot, wins: agg.wins, players };
   }

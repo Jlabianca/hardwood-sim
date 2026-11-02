@@ -144,6 +144,28 @@
         <span class="dim">Type the sportsbook line to get the model's over/under probability and fair odds.</span>
       </div>
       <div class="scrollx"><table class="props" id="propTable"></table></div>
+
+      <div class="sgp" id="sgpBox">
+        <h3 class="sec">Same-game parlay <span class="dim">· every leg is checked in the same simulated game, so correlation is measured, not assumed · add legs here or with the O / U buttons in the props tables</span></h3>
+        <div class="sgpadd">
+          <select id="sgpType"><option value="prop">Player prop</option><option value="ml">Moneyline</option><option value="spread">Spread</option><option value="total">Game total</option></select>
+          <select id="sgpPlayer"></select>
+          <select id="sgpStat">
+            <option value="pts">Points</option><option value="reb">Rebounds</option><option value="ast">Assists</option><option value="fg3m">3-pointers made</option>
+            <option value="pra">Pts + Reb + Ast</option><option value="pr">Pts + Reb</option><option value="pa">Pts + Ast</option><option value="ra">Reb + Ast</option>
+            <option value="stl">Steals</option><option value="blk">Blocks</option><option value="stocks">Steals + Blocks</option><option value="tov">Turnovers</option>
+            <option value="dd">Double-double</option><option value="td">Triple-double</option>
+          </select>
+          <select id="sgpTeam"></select>
+          <select id="sgpSide"></select>
+          <input id="sgpLine" type="number" step="0.5">
+          <button id="btnSgpAdd" class="primary">Add leg</button>
+          <button id="btnSgpClear">Clear</button>
+        </div>
+        <div class="scrollx"><table class="props sgplegs" id="sgpLegs"></table></div>
+        <div class="cards" id="sgpCards"></div>
+        <div class="sgpbook"><label>Book's parlay odds <input id="sgpBook" type="text" placeholder="+450 or 5.5"></label> <span id="sgpEv"></span></div>
+      </div>
     </div>
     <p class="note">Probabilities come from replaying the game possession by possession, over and over. The model is a simple simulation and hasn't been shown to beat the market. Treat a gap between the model and a line as a reason to dig in, not as a bet.</p>
   </section>
@@ -160,6 +182,7 @@
 </footer>
 
 <script src="js/sim.js"></script>
+<script src="js/sgp.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
