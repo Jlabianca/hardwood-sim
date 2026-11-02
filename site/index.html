@@ -86,6 +86,13 @@
     <div id="slateOut" class="hidden">
       <h3 class="sec">Games <span class="dim">· type market lines to get cover / over odds · click a matchup to open it</span></h3>
       <div class="scrollx"><table class="props slategames" id="slateGames"></table></div>
+
+      <div class="sgp" id="slipBox">
+        <h3 class="sec">Parlay slip <span class="dim">· legs from any games · legs in the same game are priced together (correlation included), separate games are independent and multiply · add legs with the buttons in the tables or on the Projections tab</span></h3>
+        <div id="slipBody"></div>
+        <div class="cards" id="slipCards"></div>
+        <div class="sgpbook"><label>Book's parlay odds <input id="slipBook" type="text" placeholder="+1200 or 13.0"></label> <span id="slipEv"></span> <button id="btnSlipClear">Clear slip</button></div>
+      </div>
       <div class="propbar">
         <h3>All props</h3>
         <label>Stat <select id="slateStat">
@@ -146,7 +153,7 @@
       <div class="scrollx"><table class="props" id="propTable"></table></div>
 
       <div class="sgp" id="sgpBox">
-        <h3 class="sec">Same-game parlay <span class="dim">· every leg is checked in the same simulated game, so correlation is measured, not assumed · add legs here or with the O / U buttons in the props tables</span></h3>
+        <h3 class="sec">Same-game parlay <span class="dim">· every leg is checked in the same simulated game, so correlation is measured, not assumed · add legs here or with the O / U buttons in the props tables · to combine games, use the Parlay slip on the Slate tab</span></h3>
         <div class="sgpadd">
           <select id="sgpType"><option value="prop">Player prop</option><option value="ml">Moneyline</option><option value="spread">Spread</option><option value="total">Game total</option></select>
           <select id="sgpPlayer"></select>

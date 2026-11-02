@@ -622,6 +622,7 @@
     renderProps();
     sgpFillPlayers();
     renderSgp();
+    renderSlip();
   }
   const fmtLine = (x) => (x > 0 ? "+" + x : x === 0 ? "PK" : String(x));
 
@@ -721,15 +722,17 @@
     const i = L.findIndex((x) => same(x, leg));
     if (i >= 0) L[i] = leg; else L.push(leg);
     if (key === sgpKey()) renderSgp();
-    toast(`Added to ${key.replace("@", " @ ")} parlay: ${legText(leg)}`);
+    renderSlip();
+    toast(`Added to ${key.replace("@", " @ ")}: ${legText(leg, key)}`);
   }
-  function legText(l) {
+  function legText(l, key) {
+    const [ga, gh] = (key || sgpKey()).split("@");
     if (l.type === "prop") {
       const nm_ = players[l.id] ? players[l.id].name : "?";
       if (l.stat === "dd" || l.stat === "td") return `${nm_} ${STAT_LBL[l.stat]}: ${l.side === "u" ? "No" : "Yes"}`;
       return `${nm_} ${l.side === "o" ? "over" : "under"} ${l.line} ${STAT_LBL[l.stat]}`;
     }
-    const team = l.side === "home" ? cur.home : cur.away;
+    const team = l.side === "home" ? gh : ga;
     if (l.type === "ml") return `${team} to win`;
     if (l.type === "spread") return `${team} ${fmtLine(l.line)}`;
     return `${l.side === "o" ? "Over" : "Under"} ${l.line} total points`;
@@ -777,8 +780,10 @@
       if (leg.line == null && t !== "ml") { toast("Enter a line first"); return; }
       addLeg(sgpKey(), leg);
     };
-    $("btnSgpClear").onclick = () => { sgpByGame[sgpKey()] = []; renderSgp(); };
+    $("btnSgpClear").onclick = () => { sgpByGame[sgpKey()] = []; renderSgp(); renderSlip(); };
     $("sgpBook").oninput = renderSgp;
+    $("slipBook").oninput = renderSlip;
+    $("btnSlipClear").onclick = () => { for (const k in sgpByGame) sgpByGame[k] = []; renderSlip(); if (projResult) renderSgp(); };
   }
   function renderSgp() {
     if (!projResult) return;
@@ -795,7 +800,7 @@
         const out = l.type === "prop" && !projResult.players[l.id];
         return `<tr><td>${i + 1}</td><td>${legText(l)}${out ? ' <span class="st">(marked out)</span>' : ""}</td><td>${pct(e.legs[i].p)}</td><td>${american(e.legs[i].p)}</td>${anyPush ? `<td>${e.legs[i].push ? pct(e.legs[i].push) : ""}</td>` : ""}<td><button class="x" data-i="${i}" title="remove">×</button></td></tr>`;
       }).join("");
-    $("sgpLegs").querySelectorAll("button.x").forEach((b) => (b.onclick = () => { legs.splice(+b.dataset.i, 1); renderSgp(); }));
+    $("sgpLegs").querySelectorAll("button.x").forEach((b) => (b.onclick = () => { legs.splice(+b.dataset.i, 1); renderSgp(); renderSlip(); }));
     const lift = e.lift;
     const liftTxt = lift == null ? "–" : `${lift.toFixed(2)}×`;
     const liftSub = lift == null ? "" : lift >= 1.05 ? "legs help each other" : lift <= 0.95 ? "legs work against each other" : "about independent";
@@ -816,6 +821,64 @@
     } else if ($("sgpBook").value) ev = `<span class="dim">Enter American (+450, -120) or decimal (5.5) odds.</span>`;
     if (anyPush) ev += ` <span class="dim">Pushes count as not hitting; use half-point lines to avoid them.</span>`;
     $("sgpEv").innerHTML = ev;
+  }
+
+  // ---------------- multi-game parlay slip ----------------
+  function resultFor(key) {
+    if (slate) { const x = slate.games.find((y) => `${y.g.away}@${y.g.home}` === key); if (x) return x.res; }
+    if (projResult && key === sgpKey()) return projResult;
+    return null;
+  }
+  function renderSlip() {
+    if (!$("slipBody")) return;
+    const keys = Object.keys(sgpByGame).filter((k) => sgpByGame[k].length);
+    if (!keys.length) {
+      $("slipBody").innerHTML = `<p class="dim">Empty. Use the ML / spread / O / U buttons on the games above, the O / U buttons in the props table, or the same-game builder on the Projections tab.</p>`;
+      $("slipCards").innerHTML = ""; $("slipEv").textContent = "";
+      return;
+    }
+    let P = 1, Pind = 1, rel2 = 0, missing = 0, nLegs = 0, minHits = Infinity, nMin = Infinity;
+    const html = keys.map((key) => {
+      const legs = sgpByGame[key], r = resultFor(key);
+      nLegs += legs.length;
+      const [ga, gh] = key.split("@");
+      if (!r) {
+        missing++;
+        return `<div class="slipgame"><div class="gh"><span>${ga} @ ${gh}</span><span class="st">not simulated — run the slate for its date or open it on Projections</span></div>` +
+          legs.map((l, i) => `<div class="leg"><span>${legText(l, key)}</span><span></span><span></span><button class="x" data-k="${key}" data-i="${i}">×</button></div>`).join("") + "</div>";
+      }
+      const e = SGP.evaluate(legs, r);
+      P *= e.joint; Pind *= e.indep;
+      if (e.joint > 0) rel2 += (e.se / e.joint) ** 2;
+      minHits = Math.min(minHits, e.hits); nMin = Math.min(nMin, e.n);
+      const lift = legs.length > 1 && e.lift != null ? ` · correlation <span class="${e.lift >= 1.05 ? "lift-hi" : e.lift <= 0.95 ? "lift-lo" : ""}">${e.lift.toFixed(2)}×</span>` : "";
+      return `<div class="slipgame"><div class="gh"><span>${ga} @ ${gh}</span><span class="dim">this game ${pct(e.joint)} (fair ${american(e.joint)})${lift}</span></div>` +
+        legs.map((l, i) => `<div class="leg"><span>${legText(l, key)}</span><span>${pct(e.legs[i].p)}</span><span>${american(e.legs[i].p)}</span><button class="x" data-k="${key}" data-i="${i}" title="remove">×</button></div>`).join("") + "</div>";
+    }).join("");
+    $("slipBody").innerHTML = html;
+    $("slipBody").querySelectorAll("button.x").forEach((b) => (b.onclick = () => {
+      sgpByGame[b.dataset.k].splice(+b.dataset.i, 1);
+      renderSlip();
+      if (projResult && b.dataset.k === sgpKey()) renderSgp();
+    }));
+    if (missing) { $("slipCards").innerHTML = ""; $("slipEv").innerHTML = `<span class="dim">Price shows once every game on the slip has been simulated.</span>`; return; }
+    const se = P * Math.sqrt(rel2), lift = Pind > 0 ? P / Pind : null;
+    const cards = [
+      ["All legs hit", pct(P), `±${(se * 100).toFixed(1)}% · ${nLegs} legs, ${keys.length} game${keys.length > 1 ? "s" : ""}`],
+      ["Fair parlay odds", american(P), P > 0 ? `decimal ${(1 / P).toFixed(2)}` : ""],
+      ["If every leg were independent", pct(Pind), `fair ${american(Pind)}`],
+      ["Correlation", lift == null ? "–" : `<span class="${lift >= 1.05 ? "lift-hi" : lift <= 0.95 ? "lift-lo" : ""}">${lift.toFixed(2)}×</span>`, "from legs that share a game"],
+    ];
+    $("slipCards").innerHTML = cards.map(([k, v, s2]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s2}</div></div>`).join("");
+    const D = SGP.toDecimal($("slipBook").value);
+    let ev = "";
+    if (D) {
+      const be = 1 / D, edge = P * D - 1;
+      ev = `Book implies ${pct(be)} · model ${pct(P)} · <b class="${edge > 0 ? "edge-hi" : "edge-lo"}">EV ${edge >= 0 ? "+" : "−"}$${Math.abs(edge * 100).toFixed(0)} per $100</b>`;
+      if (minHits < 40) ev += ` <span class="dim">(a game on the slip hit only ${minHits} times in the sims: run more simulations)</span>`;
+      else if (Math.abs(P - be) < 2 * se) ev += ` <span class="dim">— within simulation noise at ${nMin.toLocaleString()} sims per game; raise sims before trusting it</span>`;
+    } else if ($("slipBook").value) ev = `<span class="dim">Enter American (+1200, -120) or decimal (13.0) odds.</span>`;
+    $("slipEv").innerHTML = ev;
   }
 
   // ---------------- slate ----------------
@@ -863,10 +926,11 @@
     $("slateOut").classList.remove("hidden");
     renderSlateGames();
     renderSlateProps();
+    renderSlip();
   }
   function renderSlateGames() {
     if (!slate) return;
-    const head = `<tr><th>Game</th><th>Tip</th><th>Proj score</th><th>Win %</th><th>Fair ML</th><th>Fair spread</th><th title="Sportsbook spread for the home team, e.g. -4.5">Home spread</th><th>Cover</th><th>Proj total</th><th>Market total</th><th>Over / under</th></tr>`;
+    const head = `<tr><th>Game</th><th>Tip</th><th>Proj score</th><th>Win %</th><th>Fair ML</th><th>Fair spread</th><th title="Sportsbook spread for the home team, e.g. -4.5">Home spread</th><th>Cover</th><th>Proj total</th><th>Market total</th><th>Over / under</th><th>Add to slip</th></tr>`;
     $("slateGames").innerHTML = head + slate.games.map((x, i) => {
       const { g, res: r, opts } = x, n = r.n, A = g.away, H = g.home;
       const margin = Array.from(r.home, (h, j) => h - r.away[j]), total = Array.from(r.home, (h, j) => h + r.away[j]);
@@ -884,8 +948,14 @@
         <td>${H} ${fmtLine(-quant(mSorted, 0.5))}</td>
         <td><input data-g="${g.id}" data-k="spread" type="number" step="0.5" value="${sp != null ? sp : ""}" placeholder="${H}"></td><td>${cover}</td>
         <td>${meanOf(total).toFixed(1)}</td>
-        <td><input data-g="${g.id}" data-k="total" type="number" step="0.5" value="${tl != null ? tl : ""}"></td><td>${over}</td></tr>`;
+        <td><input data-g="${g.id}" data-k="total" type="number" step="0.5" value="${tl != null ? tl : ""}"></td><td>${over}</td>
+        <td class="pl">${slipBtns(x, sp, tl, meanOf(total))}</td></tr>`;
     }).join("");
+    $("slateGames").querySelectorAll("button.add").forEach((b) => (b.onclick = () => {
+      const leg = { type: b.dataset.t, side: b.dataset.side };
+      if (b.dataset.line !== undefined) leg.line = +b.dataset.line;
+      addLeg(b.dataset.key, leg);
+    }));
     $("slateGames").querySelectorAll("td[data-i]").forEach((td) => (td.onclick = () => openFromSlate(+td.dataset.i)));
     $("slateGames").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
       const gl = gameLines[inp.dataset.g] || (gameLines[inp.dataset.g] = {});
@@ -893,6 +963,15 @@
       if (inp.dataset.g === curGameId) { $("mSpread").value = gl.spread != null ? gl.spread : ""; $("mTotal").value = gl.total != null ? gl.total : ""; if (projResult) renderProjections(); }
       renderSlateGames();
     }));
+  }
+  function slipBtns(x, sp, tl, meanTotal) {
+    const key = `${x.g.away}@${x.g.home}`, A = x.g.away, H = x.g.home;
+    const b = (t, side, label, line, title) => `<button class="add" data-key="${key}" data-t="${t}" data-side="${side}"${line != null ? ` data-line="${line}"` : ""} title="${title}">${label}</button>`;
+    const tLine = tl != null ? tl : Math.floor(meanTotal) + 0.5;
+    let h = b("ml", "away", `${A}`, null, `${A} moneyline`) + b("ml", "home", `${H}`, null, `${H} moneyline`);
+    if (sp != null) h += b("spread", "away", `${A} ${fmtLine(-sp)}`, -sp, `${A} spread`) + b("spread", "home", `${H} ${fmtLine(sp)}`, sp, `${H} spread`);
+    h += b("total", "o", `O ${tLine}`, tLine, "game total over") + b("total", "u", `U ${tLine}`, tLine, "game total under");
+    return h;
   }
   function edgeCell(p1, p2, l1, l2) {
     const best = p1 >= p2 ? [p1, l1] : [p2, l2];

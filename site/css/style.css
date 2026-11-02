@@ -154,6 +154,13 @@ button.x { padding: 1px 8px; color: var(--bad); }
 button.add { padding: 1px 6px; font-size: 11px; margin-left: 2px; }
 .lift-hi { color: var(--good); } .lift-lo { color: var(--bad); }
 .toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel2); border: 1px solid var(--accent); color: var(--text); padding: 8px 14px; border-radius: 6px; font-size: 13px; z-index: 9; }
+.slipgame { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.slipgame:last-child { border-bottom: 0; }
+.slipgame .gh { display: flex; justify-content: space-between; gap: 10px; font: 600 12px var(--mono); flex-wrap: wrap; }
+.slipgame .gh .dim { font-weight: 400; }
+.slipgame .leg { display: grid; grid-template-columns: 1fr 70px 70px 34px; gap: 6px; font: 12.5px var(--mono); color: #c5d1de; padding: 2px 0 2px 12px; align-items: center; }
+.slipgame .leg span:nth-child(2), .slipgame .leg span:nth-child(3) { text-align: right; }
+table.slategames td.pl { white-space: nowrap; }
 footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--line); margin-top: 20px; }
 
 @media (max-width: 860px) {
