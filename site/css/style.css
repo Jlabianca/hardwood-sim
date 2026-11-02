@@ -161,6 +161,27 @@ button.add { padding: 1px 6px; font-size: 11px; margin-left: 2px; }
 .slipgame .leg { display: grid; grid-template-columns: 1fr 70px 70px 34px; gap: 6px; font: 12.5px var(--mono); color: #c5d1de; padding: 2px 0 2px 12px; align-items: center; }
 .slipgame .leg span:nth-child(2), .slipgame .leg span:nth-child(3) { text-align: right; }
 table.slategames td.pl { white-space: nowrap; }
+.pl { cursor: pointer; border-bottom: 1px dotted #45576b; }
+.pl:hover { color: var(--accent); border-bottom-color: var(--accent); }
+.modal { position: fixed; inset: 0; background: rgba(3, 6, 10, .72); z-index: 20; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 30px 14px; }
+.mbox { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; width: 100%; max-width: 1020px; padding: 18px 20px; position: relative; }
+.mbox .close { position: absolute; top: 12px; right: 12px; }
+.mbox h2 { margin: 0; font: 600 20px var(--mono); }
+.mbox .meta { color: var(--dim); font-size: 13px; margin: 4px 0 12px; }
+.mbox .ctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.mbox .ctl input { width: 80px; }
+.mbox .charts2 { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; margin-top: 12px; }
+.mbox .charts2 > div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.mbox .charts2 svg { width: 100%; height: 200px; display: block; }
+.mbox h4 { margin: 0 0 6px; font: 600 11px var(--mono); letter-spacing: .08em; color: var(--dim); text-transform: uppercase; }
+table.log { width: 100%; border-collapse: collapse; font: 12px var(--mono); margin-top: 12px; }
+table.log th { color: var(--dim); font-weight: 400; font-size: 11px; text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+table.log td { text-align: right; padding: 3px 6px; border-bottom: 1px solid #121c27; color: #c5d1de; }
+table.log th:nth-child(-n+2), table.log td:nth-child(-n+2) { text-align: left; }
+table.log td.hl { font-weight: 700; } table.log td.ov { color: var(--good); } table.log td.un { color: var(--bad); }
+table.log tr.prev td { opacity: .55; } table.log tr.sep td { color: var(--dim); font-size: 11px; text-align: left; padding-top: 8px; }
+table.log tr.dnp td { color: var(--dim); }
+@media (max-width: 860px) { .mbox .charts2 { grid-template-columns: 1fr; } }
 footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--line); margin-top: 20px; }
 
 @media (max-width: 860px) {

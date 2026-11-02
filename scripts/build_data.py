@@ -156,6 +156,36 @@ def rest_effects(tb):
     return out
 
 
+LOG_COLS = ["min", "pts", "oreb", "dreb", "ast", "fg3m", "stl", "blk", "tov", "fgm", "fga", "fg3a", "ftm", "fta"]
+
+
+def write_logs(pb, season, teams, path):
+    """Per player: every current-season game (DNPs included, with the reason) and the last 15 of last season.
+    Row: [date, opp, home(1/0), season, min, pts, reb, ast, 3pm, stl, blk, tov, fgm, fga, 3pa, ftm, fta, +/-, start(1/0), dnp_reason]."""
+    ids = {p["id"] for t in teams.values() for p in t["players"]}
+    d = pb[pb["athlete_id"].isin(ids)].copy()
+    d = d[d["played"] | (d["yr"] == season) & (d["did_not_play"].fillna(False).astype(bool))]
+    d["pm_i"] = pd.to_numeric(d["plus_minus"].astype(str).str.replace("+", "", regex=False), errors="coerce").fillna(0).astype(int)
+    d = d.sort_values("game_date")
+    out = {}
+    for pid, g in d.groupby("athlete_id"):
+        cur_ = g[g["yr"] == season]
+        prev = g[(g["yr"] == season - 1) & g["played"]].tail(15)
+        rows = []
+        for _, r in pd.concat([prev, cur_]).iterrows():
+            played = bool(r["played"])
+            rows.append([
+                r["game_date"], r["opponent_team_abbreviation"], 1 if r["home_away"] == "home" else 0, int(r["yr"]),
+                int(r["min"]), int(r["pts"]), int(r["oreb"] + r["dreb"]), int(r["ast"]), int(r["fg3m"]), int(r["stl"]), int(r["blk"]),
+                int(r["tov"]), int(r["fgm"]), int(r["fga"]), int(r["fg3a"]), int(r["ftm"]), int(r["fta"]), int(r["pm_i"]) if played else 0,
+                1 if bool(r["starter"]) else 0, "" if played else str(r["reason"] or "DNP").title(),
+            ])
+        out[pid] = rows
+    with open(path, "w") as fh:
+        json.dump(out, fh, separators=(",", ":"))
+    print(f"wrote {path}: game logs for {len(out)} players")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--season", type=int, default=None, help="season by end year (2027 = 2026-27)")
@@ -582,6 +612,9 @@ def main():
             else:
                 p["out"] = p["absent"] or p["status"].startswith("DNP last game")
             p.pop("absent"); p.pop("missed3")
+
+    # ---------------- game logs (for the player cards; loaded by the page only when a card opens) ----------------
+    write_logs(pb, season, teams, os.path.join(os.path.dirname(a.out) or ".", "logs.json"))
 
     model = {
         "season": season, "season_label": f"{season - 1}-{str(season)[2:]}",

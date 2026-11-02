@@ -527,7 +527,7 @@
       const tot = { sec: 0, pts: 0, oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, tov: 0, fg3m: 0, fg3a: 0, fgm: 0, fga: 0, ftm: 0, fta: 0, pf: 0 };
       const rows = ps.map((b) => {
         for (const k in tot) tot[k] += b[k];
-        return `<tr class="${st.includes(b.id) ? "" : "bench"}"><td>${b.name}<span class="pos">${b.pos}</span></td><td>${mmss(b.sec)}</td><td><b>${b.pts}</b></td><td>${b.oreb + b.dreb}</td><td>${b.ast}</td><td>${b.stl}</td><td>${b.blk}</td><td>${b.tov}</td><td>${b.fgm}-${b.fga}</td><td>${b.fg3m}-${b.fg3a}</td><td>${b.ftm}-${b.fta}</td><td>${b.pf}</td><td>${b.pm > 0 ? "+" : ""}${b.pm}</td></tr>`;
+        return `<tr class="${st.includes(b.id) ? "" : "bench"}"><td><span class="pl" data-pid="${b.id}" data-key="${sgpKey()}">${b.name}</span><span class="pos">${b.pos}</span></td><td>${mmss(b.sec)}</td><td><b>${b.pts}</b></td><td>${b.oreb + b.dreb}</td><td>${b.ast}</td><td>${b.stl}</td><td>${b.blk}</td><td>${b.tov}</td><td>${b.fgm}-${b.fga}</td><td>${b.fg3m}-${b.fg3a}</td><td>${b.ftm}-${b.fta}</td><td>${b.pf}</td><td>${b.pm > 0 ? "+" : ""}${b.pm}</td></tr>`;
       }).join("");
       const pct = (m, a) => (a ? ` (${((m / a) * 100).toFixed(0)}%)` : "");
       return `<h4 style="color:${col(t)}">${model.teams[t].name.toUpperCase()}</h4><table><tr><th>PLAYER</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>PF</th><th>+/-</th></tr>${rows}
@@ -655,7 +655,7 @@
     if (!projResult) return;
     const k = $("statSel").value, tf = $("teamFilter").value;
     const rows = propRows(k, tf);
-    const nameCell = (p) => `<td>${p.name}<span class="pos">${p.pos}</span></td><td><span class="teamtag" style="background:${col(p.team)}"></span>${p.team}</td>`;
+    const nameCell = (p) => `<td><span class="pl" data-pid="${p.id}" data-stat="${k}" data-key="${sgpKey()}">${p.name}</span><span class="pos">${p.pos}</span></td><td><span class="teamtag" style="background:${col(p.team)}"></span>${p.team}</td>`;
     const addBtns = (id, line, yn) => `<td><button class="add" data-id="${id}" data-side="o" data-line="${line}">${yn ? "Yes" : "O"}</button><button class="add" data-id="${id}" data-side="u" data-line="${line}">${yn ? "No" : "U"}</button></td>`;
     const wireAdd = (tbl) => tbl.querySelectorAll("button.add").forEach((b) => (b.onclick = () => {
       const inp = b.closest("tr").querySelector("input");
@@ -822,6 +822,121 @@
     if (anyPush) ev += ` <span class="dim">Pushes count as not hitting; use half-point lines to avoid them.</span>`;
     $("sgpEv").innerHTML = ev;
   }
+
+  // ---------------- player card ----------------
+  let logs = null, logsP = null, card = null;
+  const LOG_IX = { min: 4, pts: 5, reb: 6, ast: 7, fg3m: 8, stl: 9, blk: 10, tov: 11 };
+  const CARD_STATS = ["pts", "reb", "ast", "fg3m", "pra", "pr", "pa", "ra", "stl", "blk", "stocks", "tov", "min"];
+  const COMBO = { pra: ["pts", "reb", "ast"], pr: ["pts", "reb"], pa: ["pts", "ast"], ra: ["reb", "ast"], stocks: ["stl", "blk"] };
+  const logVal = (row, k) => (COMBO[k] ? COMBO[k].reduce((a, c) => a + row[LOG_IX[c]], 0) : row[LOG_IX[k]]);
+  function loadLogs() {
+    if (!logsP) logsP = fetch("data/logs.json").then((r) => r.json()).then((j) => (logs = j)).catch(() => (logs = {}));
+    return logsP;
+  }
+  function simFor(id, key) { // the player's simulated distribution, if this game has been simulated
+    if (projResult && projResult.players[id] && (!key || key === sgpKey())) return projResult.players[id];
+    if (slate) for (const x of slate.games) if ((!key || `${x.g.away}@${x.g.home}` === key) && x.res.players[id]) return x.res.players[id];
+    if (projResult && projResult.players[id]) return projResult.players[id];
+    return null;
+  }
+  function openPlayer(id, stat, key) {
+    card = { id, stat: CARD_STATS.includes(stat) ? stat : "pts", key: key || null };
+    $("pcard").classList.remove("hidden");
+    $("pcardBox").innerHTML = `<p class="dim">Loading game logs…</p>`;
+    loadLogs().then(renderCard);
+  }
+  function closeCard() { $("pcard").classList.add("hidden"); card = null; }
+  function renderCard() {
+    if (!card) return;
+    const { id, stat: k } = card, P = players[id];
+    let mp = null; for (const t in model.teams) { const f = model.teams[t].players.find((x) => x.id === id); if (f) { mp = f; break; } }
+    const rows = (logs && logs[id]) || [];
+    const played = rows.filter((r) => !r[19]);
+    const cur_ = played.filter((r) => r[3] === model.season);
+    const sim = simFor(id, card.key);
+    const team = P.team, [ga, gh] = (card.key || "").split("@");
+    const opp = card.key ? (team === ga ? gh : team === gh ? ga : null) : null;
+    const key = id + "|" + k;
+    const simMean = sim && sim.d[k] ? meanOf(sim.d[k]) : null;
+    const recentForLine = played.slice(-10).map((r) => logVal(r, k));
+    const line = lines[key] != null ? lines[key] : simMean != null ? Math.floor(simMean) + 0.5 : recentForLine.length ? Math.floor(meanOf(recentForLine)) + 0.5 : 0.5;
+    const avg = (rs) => (rs.length ? meanOf(rs.map((r) => logVal(r, k))) : null);
+    const hit = (rs) => { const o = rs.filter((r) => logVal(r, k) > line).length; return rs.length ? `${o}/${rs.length}` : "–"; };
+    const hitPct = (rs) => (rs.length ? rs.filter((r) => logVal(r, k) > line).length / rs.length : null);
+    const L5 = played.slice(-5), L10 = played.slice(-10);
+    const vsOpp = opp ? played.filter((r) => r[1] === opp) : [];
+    const f1 = (x) => (x == null ? "–" : x.toFixed(1));
+    const cards = [
+      ["Model tonight", sim ? f1(simMean) : "–", sim ? `median ${quant(sim.d[k], 0.5)} · over ${line}: ${pct(pOver(sim.d[k], line))}` : "run this game (Projections or Slate)"],
+      ["This season", f1(avg(cur_)), `${cur_.length} games · over ${line}: ${hit(cur_)}`],
+      ["Last 5", f1(avg(L5)), `over ${line}: ${hit(L5)}`],
+      ["Last 10", f1(avg(L10)), `over ${line}: ${hit(L10)}${L10.some((r) => r[3] !== model.season) ? " (incl. last season)" : ""}`],
+    ];
+    if (opp) cards.push([`vs ${opp}`, f1(avg(vsOpp)), vsOpp.length ? `${vsOpp.length} game${vsOpp.length > 1 ? "s" : ""} · over ${line}: ${hit(vsOpp)}` : "no games in the data"]);
+    const statOpts = CARD_STATS.map((x) => `<option value="${x}" ${x === k ? "selected" : ""}>${STAT_LBL[x]}</option>`).join("");
+    const st = mp && mp.status ? ` · <span class="st">${mp.status}</span>` : "";
+    const slipBtn = card.key ? `<button class="add" id="pcO">Add over to parlay</button><button class="add" id="pcU">Add under</button>` : "";
+    // bar chart of the last 15 games played
+    const bars = played.slice(-15);
+    const W = 600, H = 200, padL = 38, padB = 30, padT = 16, maxV = Math.max(line * 1.25, ...bars.map((r) => logVal(r, k)), 1);
+    const bw = (W - padL - 8) / Math.max(bars.length, 1);
+    const Y = (v) => H - padB - (v / maxV) * (H - padB - padT);
+    let svg = "";
+    bars.forEach((r, i) => {
+      const v = logVal(r, k), x = padL + i * bw, c = v > line ? "#3ecf8e" : v < line ? "#ef5b5b" : "#7d8ea1";
+      svg += `<rect x="${x + 2}" y="${Y(v)}" width="${bw - 4}" height="${H - padB - Y(v)}" fill="${c}" opacity="${r[3] === model.season ? 0.85 : 0.4}"><title>${r[0]} ${r[2] ? "vs" : "@"} ${r[1]}: ${v}</title></rect>`;
+      svg += `<text x="${x + bw / 2}" y="${Y(v) - 4}" fill="#e8eef5" font-size="11" font-family="monospace" text-anchor="middle">${v}</text>`;
+      svg += `<text x="${x + bw / 2}" y="${H - padB + 13}" fill="#7d8ea1" font-size="10" font-family="monospace" text-anchor="middle">${r[2] ? "" : "@"}${r[1]}</text>`;
+      svg += `<text x="${x + bw / 2}" y="${H - padB + 25}" fill="#4d5d6e" font-size="9" font-family="monospace" text-anchor="middle">${r[0].slice(5).replace("-", "/")}</text>`;
+    });
+    svg += `<line x1="${padL}" x2="${W - 4}" y1="${Y(line)}" y2="${Y(line)}" stroke="#ff8a3d" stroke-dasharray="4 4"/><text x="${padL - 4}" y="${Y(line) + 4}" fill="#ff8a3d" font-size="11" font-family="monospace" text-anchor="end">${line}</text>`;
+    // game log table, newest first
+    const cols = ["min", "pts", "reb", "ast", "fg3m", "stl", "blk", "tov"];
+    const hlCols = COMBO[k] || [k];
+    let lastYr = null;
+    const logRows = rows.slice().reverse().map((r) => {
+      let pre = "";
+      if (r[3] !== lastYr) { pre = `<tr class="sep"><td colspan="14">${r[3] - 1}-${String(r[3]).slice(2)} season</td></tr>`; lastYr = r[3]; }
+      const ha = r[2] ? "vs" : "@";
+      if (r[19]) return pre + `<tr class="dnp"><td>${r[0].slice(5).replace("-", "/")}</td><td>${ha} ${r[1]}</td><td colspan="12" style="text-align:left">DNP — ${r[19]}</td></tr>`;
+      const v = logVal(r, k), cls = v > line ? "ov" : v < line ? "un" : "";
+      return pre + `<tr class="${r[3] === model.season ? "" : "prev"}"><td>${r[0].slice(5).replace("-", "/")}</td><td>${ha} ${r[1]}</td>` +
+        cols.map((c) => `<td class="${hlCols.includes(c) ? "hl " + cls : ""}">${r[LOG_IX[c]]}</td>`).join("") +
+        `<td>${r[12]}-${r[13]}</td><td>${r[8]}-${r[14]}</td><td>${r[15]}-${r[16]}</td><td>${r[17] > 0 ? "+" : ""}${r[17]}</td>${COMBO[k] ? `<td class="hl ${cls}">${v}</td>` : ""}</tr>`;
+    }).join("");
+    $("pcardBox").innerHTML = `<button class="close" id="pcClose">✕</button>
+      <h2>${P.name} <span class="pos">${P.pos}</span></h2>
+      <div class="meta"><span class="teamtag" style="background:${col(team)}"></span>${model.teams[team].name}${opp ? ` · tonight ${team === gh ? "vs" : "@"} ${opp}` : ""}${mp ? ` · proj ${mp.min.toFixed(1)} min · DEF ${(mp.d || 0) > 0 ? "+" : ""}${(mp.d || 0).toFixed(1)}` : ""}${st}</div>
+      <div class="ctl"><label>Stat <select id="pcStat">${statOpts}</select></label><label>Line <input id="pcLine" type="number" step="0.5" value="${line}"></label>${slipBtn}
+        <span class="dim">Green = over the line, red = under. The line is shared with the props tables.</span></div>
+      <div class="cards">${cards.map(([a, b2, c]) => `<div class="card"><div class="k">${a}</div><div class="v">${b2}</div><div class="s">${c}</div></div>`).join("")}</div>
+      <div class="charts2"><div><h4>Last ${bars.length} games · ${STAT_LBL[k]}</h4><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
+        <div><h4>Model distribution tonight</h4>${sim ? `<svg id="pcHist" viewBox="0 0 600 200"></svg>` : `<p class="dim">Not simulated yet. Open the game on Projections or run the Slate.</p>`}</div></div>
+      <div class="scrollx"><table class="log"><tr><th>Date</th><th>Opp</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>+/-</th>${COMBO[k] ? `<th>${k.toUpperCase()}</th>` : ""}</tr>${logRows || `<tr><td colspan="14" class="dim">No games in the data.</td></tr>`}</table></div>`;
+    if (sim) {
+      const d = sim.d[k], mean = meanOf(d), sd = Math.sqrt(meanOf(Array.from(d, (x) => (x - mean) ** 2)));
+      const lo = Math.max(0, Math.floor(mean - 3 * sd)), hi = Math.ceil(mean + 3 * sd) + 1;
+      hist($("pcHist"), Array.from(d), lo, hi, Math.max(1, Math.round((hi - lo) / 40)), line, Math.max(1, Math.round((hi - lo) / 8)), `line ${line}`);
+    }
+    $("pcClose").onclick = closeCard;
+    $("pcStat").onchange = () => { card.stat = $("pcStat").value; renderCard(); };
+    $("pcLine").onchange = () => {
+      if ($("pcLine").value === "") delete lines[key]; else lines[key] = +$("pcLine").value;
+      renderCard();
+      if (projResult) renderProps();
+      if (slate) renderSlateProps();
+    };
+    if (card.key) {
+      $("pcO").onclick = () => addLeg(card.key, { type: "prop", id, stat: k, side: "o", line: +$("pcLine").value });
+      $("pcU").onclick = () => addLeg(card.key, { type: "prop", id, stat: k, side: "u", line: +$("pcLine").value });
+    }
+  }
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest(".pl");
+    if (el && model) { e.preventDefault(); openPlayer(el.dataset.pid, el.dataset.stat, el.dataset.key); return; }
+    if (e.target.id === "pcard") closeCard();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && card) closeCard(); });
 
   // ---------------- multi-game parlay slip ----------------
   function resultFor(key) {
@@ -1026,7 +1141,7 @@
     if (!slate) return;
     const k = $("slateStat").value, gi = $("slateGame").value, q = normName($("slateSearch").value || "");
     let rows = slateRows(k, gi, q);
-    const nameCell = (x) => `<td>${x.p.name}<span class="pos">${x.p.pos}</span></td><td><span class="teamtag" style="background:${col(x.p.team)}"></span>${x.p.team} <span class="dim">${x.home ? "vs" : "@"} ${x.opp}</span></td>`;
+    const nameCell = (x) => `<td><span class="pl" data-pid="${x.p.id}" data-stat="${k}" data-key="${x.home ? `${x.opp}@${x.p.team}` : `${x.p.team}@${x.opp}`}">${x.p.name}</span><span class="pos">${x.p.pos}</span></td><td><span class="teamtag" style="background:${col(x.p.team)}"></span>${x.p.team} <span class="dim">${x.home ? "vs" : "@"} ${x.opp}</span></td>`;
     if (k === "dd" || k === "td") {
       rows.sort((a, b) => b.m - a.m);
       $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Probability</th><th>Fair yes</th><th>Fair no</th><th>Parlay</th></tr>` +
@@ -1117,7 +1232,7 @@
           const off = outSet.has(p.id), ov = minutes[p.id] != null;
           const val = off ? "" : ov ? minutes[p.id] : tmap[p.id].toFixed(1);
           return `<label class="${off ? "off" : ""}" title="${(p.inj_note || "").replace(/"/g, "'")}"><input type="checkbox" data-id="${p.id}" ${off ? "" : "checked"}>
-          <span>${p.name} <span class="pos">${p.pos}</span></span><span class="st">${p.status || ""}</span>
+          <span><span class="pl" data-pid="${p.id}" data-key="${sgpKey()}">${p.name}</span> <span class="pos">${p.pos}</span></span><span class="st">${p.status || ""}</span>
           <span><input type="number" min="0" max="48" step="1" data-min="${p.id}" class="${ov ? "ovr" : ""}" value="${val}" ${off ? "disabled" : ""}></span>
           <span>${avg(p.avg.pts)}</span><span>${avg(p.avg.reb)}</span><span>${avg(p.avg.ast)}</span>
           <span class="${(p.d || 0) >= 1 ? "dpos" : (p.d || 0) <= -1 ? "dneg" : ""}">${(p.d || 0) > 0 ? "+" : ""}${(p.d || 0).toFixed(1)}</span></label>`;
