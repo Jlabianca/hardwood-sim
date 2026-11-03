@@ -52,7 +52,20 @@
     initPicker();
     initTabs();
     initControls();
-    fromHash() || selectGame(defaultGame());
+    applyMode();
+    document.body.dataset.tab = "today";
+    $("modeSimple").onclick = () => { simple = true; applyMode(); if (slate) renderToday(); };
+    $("modeAdv").onclick = () => { simple = false; applyMode(); if (slate) renderToday(); };
+    initSearch();
+    if (fromHash()) {
+      document.body.dataset.tab = "watch";
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "watch"));
+      document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-watch"));
+    } else {
+      selectGame(defaultGame());
+      runSlate();
+      loadLogs();
+    }
   }).catch((e) => { $("dataLine").textContent = "Could not load data/model.json — serve this folder over http (see README). " + e; });
 
   const todayET = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -81,7 +94,7 @@
     const dates = [...new Set(model.schedule.map((g) => g.date))];
     const def = defaultDate(), t = todayET();
     $("dateSel").innerHTML = dates.map((d) => `<option value="${d}" ${d === def ? "selected" : ""}>${fmtDay(d)}${d === t ? " (today)" : ""}</option>`).join("");
-    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate") runSlate(); if (activeTab() === "dvp") renderDvp(); };
+    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate" || activeTab() === "today") runSlate(); if (activeTab() === "dvp") renderDvp(); };
     const teams = Object.keys(model.teams).sort();
     const opts = teams.map((t) => `<option>${t}</option>`).join("");
     $("awaySel").innerHTML = opts; $("homeSel").innerHTML = opts;
@@ -147,10 +160,12 @@
     document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => {
       document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
       document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-" + t.dataset.tab));
+      document.body.dataset.tab = t.dataset.tab;
       if (t.dataset.tab === "proj" && projStale) runProjections();
       if (t.dataset.tab === "dvp") renderDvp();
       if (t.dataset.tab === "track") renderTracker();
-      if (t.dataset.tab === "slate" && (slateStale || !slate || slate.date !== $("dateSel").value)) runSlate();
+      if ((t.dataset.tab === "slate" || t.dataset.tab === "today") && (slateStale || !slate || slate.date !== $("dateSel").value)) runSlate();
+      else if (t.dataset.tab === "today") renderToday();
     }));
   }
 
@@ -649,8 +664,8 @@
     const sortedTotal = [...total].sort((a, b) => a - b);
     const sortedMargin = [...margin].sort((a, b) => a - b);
     const cards = [
-      [`${A} win`, pct(pA), `fair ${american(pA)}`],
-      [`${H} win`, pct(pH), `fair ${american(pH)}`],
+      [`${A} win`, both(pct(pA), inTen(pA)), both(`fair ${american(pA)}`, plainPay(pA))],
+      [`${H} win`, both(pct(pH), inTen(pH)), both(`fair ${american(pH)}`, plainPay(pH))],
       ["Avg score", `${meanOf(r.away).toFixed(1)}–${meanOf(r.home).toFixed(1)}`, `${A}–${H}`],
       ["Fair spread", `${H} ${fmtLine(-quant(sortedMargin, 0.5))}`, `mean margin ${meanOf(margin) > 0 ? H : A} by ${Math.abs(meanOf(margin)).toFixed(1)}`],
       ["Avg total", meanOf(total).toFixed(1), `median ${quant(sortedTotal, 0.5)} · 1H ${meanOf(total1h).toFixed(1)}`],
@@ -726,7 +741,7 @@
       wireAdd($("propTable"));
       return;
     }
-    $("propTable").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th><th>Parlay</th></tr>` +
+    $("propTable").innerHTML = `<tr><th>Player</th><th>Team</th><th class="adv">Avg min</th><th>Projection</th><th class="adv">Median</th><th class="adv">10th–90th</th><th>Line</th><th class="simp">Model's pick</th><th class="adv">Over</th><th class="adv">Under</th><th class="adv">Fair over</th><th class="adv">Fair under</th><th>Parlay</th></tr>` +
       rows.map(({ p, d, m, min }) => {
         const key = p.id + "|" + k;
         const med = quant(d, 0.5);
@@ -734,9 +749,9 @@
         const line = user ? lines[key] : Math.floor(m) + 0.5;
         const o = pOver(d, line), u = pUnder(d, line);
         const oc = user && o >= 0.56 ? "edge-hi" : "", uc = user && u >= 0.56 ? "edge-lo" : "";
-        return `<tr>${nameCell(p)}<td>${min.toFixed(1)}</td><td>${m.toFixed(1)}</td><td>${med}</td><td>${quant(d, 0.1)}–${quant(d, 0.9)}</td>
-          <td><input data-key="${key}" type="number" step="0.5" value="${line}"></td>
-          <td class="${oc}">${pct(o)}</td><td class="${uc}">${pct(u)}</td><td>${american(o)}</td><td>${american(u)}</td>${addBtns(p.id, line, false)}</tr>`;
+        return `<tr>${nameCell(p)}<td class="adv">${min.toFixed(1)}</td><td>${m.toFixed(1)}</td><td class="adv">${med}</td><td class="adv">${quant(d, 0.1)}–${quant(d, 0.9)}</td>
+          <td><input data-key="${key}" type="number" step="0.5" value="${line}"></td><td class="simp">${pickLabel(o, u)}</td>
+          <td class="adv ${oc}">${pct(o)}</td><td class="adv ${uc}">${pct(u)}</td><td class="adv">${american(o)}</td><td class="adv">${american(u)}</td>${addBtns(p.id, line, false)}</tr>`;
       }).join("");
     wireAdd($("propTable"));
     $("propTable").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
@@ -866,7 +881,7 @@
     const liftTxt = lift == null ? "–" : `${lift.toFixed(2)}×`;
     const liftSub = lift == null ? "" : lift >= 1.05 ? "legs help each other" : lift <= 0.95 ? "legs work against each other" : "about independent";
     const cards = [
-      ["All legs hit", pct(e.joint), `±${(e.se * 100).toFixed(1)}% · ${e.hits.toLocaleString()} of ${e.n.toLocaleString()} sims`],
+      ["All legs hit", both(pct(e.joint), oneIn(e.joint)), `±${(e.se * 100).toFixed(1)}% · ${e.hits.toLocaleString()} of ${e.n.toLocaleString()} sims`],
       ["Fair parlay odds", american(e.joint), e.joint > 0 ? `decimal ${(1 / e.joint).toFixed(2)}` : ""],
       ["If legs were independent", pct(e.indep), `fair ${american(e.indep)}`],
       ["Correlation", `<span class="${lift >= 1.05 ? "lift-hi" : lift <= 0.95 ? "lift-lo" : ""}">${liftTxt}</span>`, liftSub],
@@ -876,7 +891,7 @@
     let ev = "";
     if (D) {
       const be = 1 / D, edge = e.joint * D - 1;
-      ev = `Book implies ${pct(be)} · model ${pct(e.joint)} · <b class="${edge > 0 ? "edge-hi" : "edge-lo"}">EV ${edge >= 0 ? "+" : "−"}$${Math.abs(edge * 100).toFixed(0)} per $100</b>`;
+      ev = both(`Book implies ${pct(be)} · model ${pct(e.joint)} · <b class="${edge > 0 ? "edge-hi" : "edge-lo"}">EV ${edge >= 0 ? "+" : "−"}$${Math.abs(edge * 100).toFixed(0)} per $100</b>`, parlaySentence(e.joint, D));
       if (e.hits < 40) ev += ` <span class="dim">(only ${e.hits} hits in the sims: run more simulations for a steadier number)</span>`;
       else if (Math.abs(e.joint - be) < 2 * e.se) ev += ` <span class="dim">— within simulation noise at ${e.n.toLocaleString()} sims; try 10,000+ before trusting it</span>`;
     } else if ($("sgpBook").value) ev = `<span class="dim">Enter American (+450, -120) or decimal (5.5) odds.</span>`;
@@ -1029,15 +1044,23 @@
         cols.map((c) => `<td class="${hlCols.includes(c) ? "hl " + cls : ""}">${r[LOG_IX[c]]}</td>`).join("") +
         `<td>${r[12]}-${r[13]}</td><td>${r[8]}-${r[14]}</td><td>${r[15]}-${r[16]}</td><td>${r[17] > 0 ? "+" : ""}${r[17]}</td>${COMBO[k] ? `<td class="hl ${cls}">${v}</td>` : ""}</tr>`;
     }).join("");
+    let take = "";
+    const ctx = card.key ? gameCtx(card.key) : null;
+    if (ctx && sim && sim.d[k]) {
+      const o = pOver(sim.d[k], line), u = pUnder(sim.d[k], line), side = o >= u ? "o" : "u", pr = Math.max(o, u), c = conf(pr);
+      const rs = reasonsFor(id, k, side, ctx, line);
+      take = `<div class="take"><b>Model's take:</b> ${c.label === "Pass" ? `toss-up at ${line} ${STAT_LBL[k]} (${inTen(pr)} either way)` : `${side === "o" ? "OVER" : "UNDER"} ${line} ${STAT_LBL[k]} · <span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · hits ${inTen(pr)}`}<br>${whyHtml(rs)}</div>`;
+    }
     $("pcardBox").innerHTML = `<button class="close" id="pcClose">✕</button>
-      <h2>${P.name} <span class="pos">${P.pos}</span></h2>
+      <h2>${P.name} <span class="pos">${P.pos}</span> <button class="fav ${favs.has(id) ? "on" : ""}" id="pcFav" title="Pin this player on the Today page">${favs.has(id) ? "★ Favorite" : "☆ Favorite"}</button></h2>
       <div class="meta"><span class="teamtag" style="background:${col(team)}"></span>${model.teams[team].name}${opp ? ` · tonight ${team === gh ? "vs" : "@"} ${opp}` : ""}${mp ? ` · proj ${mp.min.toFixed(1)} min · DEF ${(mp.d || 0) > 0 ? "+" : ""}${(mp.d || 0).toFixed(1)}` : ""}${st}</div>
+      ${take}
       <div class="ctl"><label>Stat <select id="pcStat">${statOpts}</select></label><label>Line <input id="pcLine" type="number" step="0.5" value="${line}"></label>${slipBtn}
         <span class="dim">Green = over the line, red = under. The line is shared with the props tables.</span></div>
       <div class="cards">${cards.map(([a, b2, c]) => `<div class="card"><div class="k">${a}</div><div class="v">${b2}</div><div class="s">${c}</div></div>`).join("")}</div>
       <div class="charts2"><div><h4>Last ${bars.length} games · ${STAT_LBL[k]}</h4><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
         <div><h4>Model distribution tonight</h4>${sim ? `<svg id="pcHist" viewBox="0 0 600 200"></svg>` : `<p class="dim">Not simulated yet. Open the game on Projections or run the Slate.</p>`}</div></div>
-      ${sim ? `<h4 class="lad">Alt-line ladder · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· type a book's price on any rung for its EV; O / U adds that rung to the parlay</span></h4><div class="scrollx"><table class="props ladder" id="pcLadder"></table></div>` : ""}
+      ${sim ? `<h4 class="lad adv">Alt-line ladder · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· type a book's price on any rung for its EV; O / U adds that rung to the parlay</span></h4><div class="scrollx adv"><table class="props ladder" id="pcLadder"></table></div>` : ""}
       ${matchupLine(P, opp, k)}
       ${wowyHtml(id, P, k, line, rows)}
       <div class="scrollx"><table class="log"><tr><th>Date</th><th>Opp</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>+/-</th>${COMBO[k] ? `<th>${k.toUpperCase()}</th>` : ""}</tr>${logRows || `<tr><td colspan="14" class="dim">No games in the data.</td></tr>`}</table></div>`;
@@ -1053,6 +1076,7 @@
       ladderTable($("pcLadder"), `${id}|${k}`, ck, rows, "Over", "Under");
     }
     $("pcClose").onclick = closeCard;
+    $("pcFav").onclick = () => { toggleFav(id); renderCard(); };
     $("pcStat").onchange = () => { card.stat = $("pcStat").value; renderCard(); };
     $("pcLine").onchange = () => {
       if ($("pcLine").value === "") delete lines[key]; else lines[key] = +$("pcLine").value;
@@ -1237,7 +1261,7 @@
     if (missing) { $("slipCards").innerHTML = ""; $("slipEv").innerHTML = `<span class="dim">Price shows once every game on the slip has been simulated.</span>`; return; }
     const se = P * Math.sqrt(rel2), lift = Pind > 0 ? P / Pind : null;
     const cards = [
-      ["All legs hit", pct(P), `±${(se * 100).toFixed(1)}% · ${nLegs} legs, ${keys.length} game${keys.length > 1 ? "s" : ""}`],
+      ["All legs hit", both(pct(P), oneIn(P)), `±${(se * 100).toFixed(1)}% · ${nLegs} legs, ${keys.length} game${keys.length > 1 ? "s" : ""}`],
       ["Fair parlay odds", american(P), P > 0 ? `decimal ${(1 / P).toFixed(2)}` : ""],
       ["If every leg were independent", pct(Pind), `fair ${american(Pind)}`],
       ["Correlation", lift == null ? "–" : `<span class="${lift >= 1.05 ? "lift-hi" : lift <= 0.95 ? "lift-lo" : ""}">${lift.toFixed(2)}×</span>`, "from legs that share a game"],
@@ -1247,11 +1271,278 @@
     let ev = "";
     if (D) {
       const be = 1 / D, edge = P * D - 1;
-      ev = `Book implies ${pct(be)} · model ${pct(P)} · <b class="${edge > 0 ? "edge-hi" : "edge-lo"}">EV ${edge >= 0 ? "+" : "−"}$${Math.abs(edge * 100).toFixed(0)} per $100</b>`;
+      ev = both(`Book implies ${pct(be)} · model ${pct(P)} · <b class="${edge > 0 ? "edge-hi" : "edge-lo"}">EV ${edge >= 0 ? "+" : "−"}$${Math.abs(edge * 100).toFixed(0)} per $100</b>`, parlaySentence(P, D));
       if (minHits < 40) ev += ` <span class="dim">(a game on the slip hit only ${minHits} times in the sims: run more simulations)</span>`;
       else if (Math.abs(P - be) < 2 * se) ev += ` <span class="dim">— within simulation noise at ${nMin.toLocaleString()} sims per game; raise sims before trusting it</span>`;
     } else if ($("slipBook").value) ev = `<span class="dim">Enter American (+1200, -120) or decimal (13.0) odds.</span>`;
     $("slipEv").innerHTML = ev;
+  }
+
+  // ---------------- plain language (Simple mode) ----------------
+  const both = (adv, simp) => `<span class="adv">${adv}</span><span class="simp">${simp}</span>`;
+  const inTen = (p) => { const n = Math.round(p * 10); return n <= 0 ? "less than 1 in 10" : n >= 10 ? "almost always" : `about ${n} in 10`; };
+  const oneIn = (p) => (p > 0 ? `about 1 in ${1 / p < 10 ? (1 / p).toFixed(1).replace(/\.0$/, "") : Math.round(1 / p)}` : "–");
+  const plainPay = (p) => (p > 0 && p < 1 ? `fair price: $100 wins $${Math.round((1 / p - 1) * 100)}` : "");
+  function conf(p) { // p = model probability on the better side; tuned to be calibrated on the backtest
+    if (p >= 0.62) return { label: "Strong", cls: "lbl-strong", stars: "★★★" };
+    if (p >= 0.57) return { label: "Lean", cls: "lbl-lean", stars: "★★" };
+    if (p >= 0.53) return { label: "Slight", cls: "lbl-slight", stars: "★" };
+    return { label: "Pass", cls: "lbl-pass", stars: "" };
+  }
+  function pickLabel(o, u) {
+    const side = o >= u ? "Over" : "Under", p = Math.max(o, u), c = conf(p);
+    if (c.label === "Pass") return `<span class="lbl-pass">Toss-up</span>`;
+    return `${side} · <span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> <span class="dim">(${inTen(p)})</span>`;
+  }
+  function parlaySentence(p, D) {
+    const be = 1 / D, ratio = p / be;
+    const verdict = ratio >= 1.08 ? `<b class="edge-hi">a good price</b>` : ratio >= 1.0 ? "about a fair price" : ratio >= 0.92 ? "a slightly bad price" : `<b class="edge-lo">a bad price</b>`;
+    return `The model says this hits ${oneIn(p)}. The book pays like it hits ${oneIn(be)} — ${verdict}.`;
+  }
+  let simple = true;
+  try { const m = localStorage.getItem("hw_mode"); if (m) simple = m === "simple"; } catch (e) {}
+  function applyMode() {
+    document.body.classList.toggle("simple", simple);
+    $("modeSimple").classList.toggle("on", simple); $("modeAdv").classList.toggle("on", !simple);
+    try { localStorage.setItem("hw_mode", simple ? "simple" : "advanced"); } catch (e) {}
+  }
+
+  // ---------------- favorites + search ----------------
+  let favs = new Set();
+  try { favs = new Set(JSON.parse(localStorage.getItem("hw_favs") || "[]")); } catch (e) {}
+  function toggleFav(id) {
+    if (favs.has(id)) favs.delete(id); else favs.add(id);
+    try { localStorage.setItem("hw_favs", JSON.stringify([...favs])); } catch (e) {}
+    if (slate) renderToday();
+  }
+  function gameKeyFor(team, date) {
+    const g = model.schedule.find((x) => x.date === date && (x.away === team || x.home === team));
+    return g ? `${g.away}@${g.home}` : null;
+  }
+  function initSearch() {
+    const opts = [];
+    for (const t in model.teams) for (const p of model.teams[t].players) opts.push(`<option value="${p.name} (${t})">`);
+    $("playerList").innerHTML = opts.join("");
+    const go = () => {
+      const v = $("search").value.trim();
+      const m = v.match(/^(.*) \(([A-Z]{2,4})\)$/);
+      let id = null;
+      if (m) { const f = model.teams[m[2]] && model.teams[m[2]].players.find((p) => p.name === m[1]); if (f) id = f.id; }
+      if (!id && v.length >= 3) { const f = findPlayer(v); if (f) id = f.id; }
+      if (!id) return;
+      $("search").value = "";
+      openPlayer(id, "pts", gameKeyFor(players[id].team, $("dateSel").value));
+    };
+    $("search").onchange = go;
+    $("search").onkeydown = (e) => { if (e.key === "Enter") go(); };
+  }
+
+  // ---------------- "why?" reasons ----------------
+  function seasonRows(id, before) {
+    return ((logs && logs.players && logs.players[id]) || []).filter((r) => r[3] === model.season && !r[19] && (!before || r[0] < before));
+  }
+  function standinLine(id, k, date) {
+    const rs = seasonRows(id, date);
+    if (rs.length < 3) return null;
+    return Math.floor(meanOf(rs.map((r) => logVal(r, k)))) + 0.5;
+  }
+  function wowyFor(id, team, k, mates) { // [{X, wo: games without, diff: avg without - avg with}]
+    if (!logs || !logs.teams) return [];
+    const rows = ((logs.players && logs.players[id]) || []).filter((r) => !r[19] && r[20] === team);
+    const out = [];
+    for (const X of mates) {
+      const xr = (logs.players[X.id] || []);
+      const win = {};
+      for (const r of xr) if (r[20] === team) { const w = win[r[3]] || (win[r[3]] = [r[0], r[0]]); if (r[0] < w[0]) w[0] = r[0]; if (r[0] > w[1]) w[1] = r[0]; }
+      const wi = [], wo = [];
+      for (const r of rows) {
+        const w = win[r[3]];
+        if (!w || r[0] < w[0] || r[0] > w[1]) continue;
+        (((logs.teams[team] || {})[r[0]] || []).includes(X.id) ? wi : wo).push(logVal(r, k));
+      }
+      if (wo.length && wi.length) out.push({ X, wo: wo.length, diff: meanOf(wo) - meanOf(wi) });
+    }
+    return out;
+  }
+  function gameCtx(key) { // {g, res, rest} for a matchup that has been simulated
+    if (slate) { const x = slate.games.find((y) => `${y.g.away}@${y.g.home}` === key); if (x) return { g: x.g, res: x.res, rest: x.opts.rest }; }
+    if (projResult && key === sgpKey()) return { g: schedFor(cur.away, cur.home) || { away: cur.away, home: cur.home, date: $("dateSel").value }, res: projResult, rest: { away: $("restAway").value, home: $("restHome").value } };
+    return null;
+  }
+  function reasonsFor(id, k, side, ctx, line) {
+    const pro = [], con = [];
+    const add = (supportsOver, txt) => ((supportsOver === (side === "o")) ? pro : con).push(txt);
+    const P = players[id], team = P.team, isHome = ctx.g.home === team, opp = isHome ? ctx.g.away : ctx.g.home;
+    const sim = ctx.res.players[id];
+    const SN = { pts: "points", reb: "rebounds", ast: "assists", fg3m: "threes", pra: "pts+reb+ast" }[k] || STAT_LBL[k];
+    // teammates out tonight
+    const outNow = outFor([team]);
+    const mates = model.teams[team].players.filter((x) => x.id !== id && outNow.has(x.id) && x.min >= 18);
+    const ww = wowyFor(id, team, k, mates);
+    let generic = 0;
+    for (const X of mates) {
+      const w = ww.find((z) => z.X.id === X.id);
+      const thr = k === "pts" || k === "pra" ? 1.5 : 0.7;
+      const last = lastName(X.name);
+      if (w && w.wo >= 3 && Math.abs(w.diff) >= thr) add(w.diff > 0, `${last} is out — he averages ${w.diff > 0 ? "+" : ""}${w.diff.toFixed(1)} ${SN} without him (${w.wo} games)`);
+      else if (!generic && X.min >= 25) { generic++; add(true, `${last} is out, so there are more shots and minutes to go around`); }
+    }
+    // matchup
+    if (model.dvp && model.dvp.stats.includes(k)) {
+      const T = model.dvp.windows.season.teams[opp][P.pos], r = T && T.rank[k];
+      const pos = POS_NAME[P.pos];
+      if (r && r <= 6) add(true, `${opp} gives up ${rankPhrase(r, "most")} ${SN} to ${pos}`);
+      if (r && r >= 25) add(false, `${opp} allows ${rankPhrase(31 - r, "fewest")} ${SN} to ${pos}`);
+    }
+    // minutes
+    const rs = seasonRows(id);
+    if (sim && rs.length >= 3) {
+      const pm = meanOf(Array.from(sim.raw ? sim.raw.min : sim.d.min)), sm = meanOf(rs.map((r) => r[4]));
+      if (pm - sm >= 3) add(true, `projected for more minutes than usual (${pm.toFixed(0)} vs. ${sm.toFixed(0)})`);
+      if (sm - pm >= 3) add(false, `projected for fewer minutes than usual (${pm.toFixed(0)} vs. ${sm.toFixed(0)})`);
+    }
+    // recent form vs the line
+    const L5 = rs.slice(-5);
+    if (L5.length === 5) {
+      const ov = L5.filter((r) => logVal(r, k) > line).length;
+      if (ov >= 4) add(true, `went over ${line} in ${ov} of his last 5`);
+      if (ov <= 1) add(false, `stayed under ${line} in ${5 - ov} of his last 5`);
+    }
+    // game environment
+    const tot = meanOf(Array.from(ctx.res.home, (h, i) => h + ctx.res.away[i])), lgT = 2 * model.league.pts_per_team;
+    if (["pts", "pra", "ast", "fg3m"].includes(k)) {
+      if (tot - lgT >= 5) add(true, `high-scoring game expected (total ~${Math.round(tot)})`);
+      if (lgT - tot >= 5) add(false, `low-scoring game expected (total ~${Math.round(tot)})`);
+    }
+    const mySide = isHome ? "home" : "away", oSide = isHome ? "away" : "home";
+    if (ctx.rest && ctx.rest[mySide] === "b2b") add(false, `${team} is on the 2nd night of a back-to-back`);
+    if (ctx.rest && ctx.rest[oSide] === "b2b") add(true, `${opp} is on the 2nd night of a back-to-back`);
+    const n = ctx.res.n; let blow = 0;
+    for (let i = 0; i < n; i++) if (Math.abs(ctx.res.home[i] - ctx.res.away[i]) >= 15) blow++;
+    if (blow / n >= 0.45 && sim && meanOf(Array.from(sim.d.min)) >= 28) add(false, "a lopsided game could cost him late minutes");
+    return { pro, con };
+  }
+  function lastName(n) {
+    const parts = n.split(" ");
+    return /^(Jr\.?|Sr\.?|II|III|IV)$/.test(parts[parts.length - 1]) && parts.length > 2 ? parts.slice(-2).join(" ") : parts[parts.length - 1];
+  }
+  const ordinalN = (n) => (n === 2 ? "2nd" : n === 3 ? "3rd" : n + "th");
+  const rankPhrase = (n, word) => (n === 1 ? `the ${word}` : `the ${ordinalN(n)}-${word}`);
+  function whyHtml(rs) {
+    const pro = rs.pro.slice(0, 3), con = rs.con.slice(0, 1);
+    if (!pro.length && !con.length) return `<span class="dim">No single big factor — it's his usual role against this opponent.</span>`;
+    return (pro.length ? `Why: ${pro.join("; ")}.` : "") + (con.length ? ` <span class="dim">Watch out: ${con[0]}.</span>` : "");
+  }
+
+  // ---------------- today ----------------
+  const PLAY_STATS = ["pts", "reb", "ast", "fg3m", "pra"];
+  const PLAY_MIN = { pts: 10, reb: 4, ast: 3, fg3m: 1.3, pra: 16 }; // only real prop lines: scorers, rebounders, passers, shooters
+  function todayPlays() {
+    const out = [];
+    for (const x of slate.games) {
+      if (x.g.home_score != null) continue;
+      for (const p of Object.values(x.res.players)) {
+        if (meanOf(p.d.min) < 20) continue;
+        let best = null;
+        for (const k of PLAY_STATS) {
+          const key = p.id + "|" + k, user = lines[key] != null;
+          const line = user ? lines[key] : standinLine(p.id, k, x.g.date);
+          if (line == null || line < 1.5 || (!user && meanOf(p.d[k]) < PLAY_MIN[k])) continue;
+          const o = pOver(p.d[k], line), u = pUnder(p.d[k], line), pr = Math.max(o, u);
+          if (!best || pr > best.pr) best = { x, p, k, line, user, side: o >= u ? "o" : "u", pr, o, u };
+        }
+        if (best && best.pr >= 0.57) out.push(best);
+      }
+    }
+    out.sort((a, b) => b.pr - a.pr);
+    const perTeam = {}, pick = [];
+    for (const pl of out) { const t = pl.p.team; if ((perTeam[t] = (perTeam[t] || 0) + 1) <= 2) pick.push(pl); if (pick.length >= 8) break; }
+    for (const pl of pick) { // role change: projected minutes far from his season average -> the book line will have moved
+      const rs = seasonRows(pl.p.id), pm = meanOf(Array.from(pl.p.d.min));
+      pl.role = rs.length >= 3 ? pm - meanOf(rs.map((r) => r[4])) : 0;
+    }
+    return pick;
+  }
+  function playCard(pl, compact) {
+    const c = conf(pl.pr), key = `${pl.x.g.away}@${pl.x.g.home}`, opp = pl.p.team === pl.x.g.home ? `vs ${pl.x.g.away}` : `@ ${pl.x.g.home}`;
+    const why = whyHtml(reasonsFor(pl.p.id, pl.k, pl.side, { g: pl.x.g, res: pl.x.res, rest: pl.x.opts.rest }, pl.line));
+    return `<div class="play"><div class="what"><span class="pl" data-pid="${pl.p.id}" data-stat="${pl.k}" data-key="${key}">${pl.p.name}</span> <span class="dim">${pl.p.team} ${opp}</span></div>
+      <div class="what">${pl.side === "o" ? "OVER" : "UNDER"} ${pl.line} ${STAT_LBL[pl.k]}</div>
+      <div class="conf"><span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · ${both(`${pct(pl.pr)} · fair ${american(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`, `hits ${inTen(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`)}${pl.user ? "" : ' <span class="dim">· line = his season average</span>'}${!pl.user && Math.abs(pl.role || 0) >= 6 ? ` <span class="st">· ${pl.role > 0 ? "bigger" : "smaller"} role tonight — books will likely adjust this line</span>` : ""}</div>
+      ${compact ? "" : `<div class="why">${why}</div>`}
+      <div class="acts" style="margin-top:6px"><button class="add" data-tk="${key}" data-tid="${pl.p.id}" data-ts="${pl.k}" data-tside="${pl.side}" data-tl="${pl.line}">+ Parlay</button></div></div>`;
+  }
+  function renderToday() {
+    if (!slate || !model) return;
+    const date = slate.date;
+    const all = model.schedule.filter((g) => g.date === date);
+    $("todayTitle").textContent = date === todayET() ? "Today" : fmtDay(date);
+    if (!logs) { loadLogs().then(renderToday); }
+    // favorite players playing on this date
+    const favRows = [];
+    for (const x of slate.games) for (const id of favs) {
+      const p = x.res.players[id];
+      if (!p) continue;
+      const key = `${x.g.away}@${x.g.home}`, opp = p.team === x.g.home ? `vs ${x.g.away}` : `@ ${x.g.home}`;
+      let best = null;
+      for (const k of PLAY_STATS) {
+        const line = lines[id + "|" + k] != null ? lines[id + "|" + k] : standinLine(id, k, date);
+        if (line == null || line < 1.5) continue;
+        const o = pOver(p.d[k], line), u = pUnder(p.d[k], line);
+        if (!best || Math.max(o, u) > best.pr) best = { k, line, o, u, pr: Math.max(o, u) };
+      }
+      const proj = ["pts", "reb", "ast"].map((k) => `${Math.round(meanOf(p.d[k]))} ${k}`).join(", ");
+      favRows.push(`<li><span class="pl" data-pid="${id}" data-key="${key}">${p.name}</span> <span class="dim">${p.team} ${opp}</span> — about ${proj}${best ? ` · pick: ${pickLabel(best.o, best.u).replace(/^(Over|Under)/, `$1 ${best.line} ${STAT_LBL[best.k]}`)}` : ""}</li>`);
+    }
+    const favOut = [...favs].filter((id) => players[id] && all.some((g) => g.away === players[id].team || g.home === players[id].team) && !slate.games.some((x) => x.res.players[id]));
+    for (const id of favOut) favRows.push(`<li>${players[id].name} <span class="st">not playing (marked out)</span></li>`);
+    $("todayFav").innerHTML = favs.size ? `<h3 class="sec">Your players</h3>${favRows.length ? `<ul class="favlist">${favRows.join("")}</ul>` : `<p class="dim">None of your favorite players are playing on this date.</p>`}` : "";
+    // favorite plays
+    const plays = slate.games.length ? todayPlays() : [];
+    $("todayPlays").innerHTML = `<h3 class="sec">Model's favorite plays <span class="dim">· strongest leans of the night, best stat per player, vs. his season average or your line</span></h3>` +
+      (plays.length ? `<div class="plays">${plays.map((pl) => playCard(pl)).join("")}</div>` : `<p class="dim">${slate.games.length < all.length ? "Still simulating…" : "No strong leans tonight — the model sees most players right around their averages."}</p>`);
+    // game cards
+    $("todayGames").innerHTML = all.map((g) => {
+      const x = slate.games.find((y) => y.g.id === g.id), A = g.away, H = g.home, TA = model.teams[A], TH = model.teams[H];
+      const when = g.home_score != null ? `Final: ${A} ${g.away_score} – ${H} ${g.home_score}` : tipTime(g.start);
+      if (!x) return `<div class="gcard"><div class="top"><span class="teams">${A} @ ${H}</span><span class="when">${when}</span></div><div class="dim">Simulating…</div></div>`;
+      const r = x.res, n = r.n, pH = r.wins.home / n, pA = 1 - pH;
+      const fav = pH >= 0.5 ? [H, TH, pH] : [A, TA, pA];
+      const sa = Math.round(meanOf(r.away)), sh = Math.round(meanOf(r.home));
+      let blow = 0; for (let i = 0; i < n; i++) if (Math.abs(r.home[i] - r.away[i]) >= 15) blow++;
+      const flags = [];
+      if (x.opts.rest.away === "b2b") flags.push(`${TA.short} on a back-to-back`);
+      if (x.opts.rest.home === "b2b") flags.push(`${TH.short} on a back-to-back`);
+      if (blow / n >= 0.45) flags.push("blowout risk: starters could sit late");
+      if (fav[2] < 0.56) flags.unshift("coin flip");
+      const keyLines = (t) => {
+        const ps = Object.values(r.players).filter((p) => p.team === t);
+        const top = (k) => ps.slice().sort((a, b) => meanOf(b.d[k]) - meanOf(a.d[k]))[0];
+        const parts = {};
+        for (const k of ["pts", "reb", "ast"]) { const p = top(k); if (p) (parts[p.id] = parts[p.id] || { p, s: [] }).s.push(`~${Math.round(meanOf(p.d[k]))} ${k}`); }
+        return Object.values(parts).map((v) => `<span class="pl" data-pid="${v.p.id}" data-key="${A}@${H}">${v.p.short}</span> ${v.s.join(", ")}`).join(" · ");
+      };
+      const outs = (t) => model.teams[t].players.filter((p) => outFor([t]).has(p.id) && p.min >= 15).map((p) => p.short);
+      const oA = outs(A), oH = outs(H);
+      const i = slate.games.indexOf(x);
+      return `<div class="gcard"><div class="top"><span class="teams"><span class="teamtag" style="background:${col(A)}"></span>${A} @ <span class="teamtag" style="background:${col(H)}"></span>${H}</span><span class="when">${when}</span></div>
+        <div class="verdict"><b style="color:${col(fav[0])}">${fav[1].short}</b> win ${both(`${pct(fav[2])} (fair ${american(fav[2])})`, inTen(fav[2]))}${simple ? " times" : ""} · likely score <b>${fav[0] === H ? `${H} ${sh}–${sa}` : `${A} ${sa}–${sh}`}</b> · total ~${sa + sh}</div>
+        <div class="bar"><i style="width:${(pA * 100).toFixed(1)}%;background:${col(A)}"></i><i style="width:${(pH * 100).toFixed(1)}%;background:${col(H)}"></i></div>
+        ${flags.length ? `<div class="flags">⚠ ${flags.join(" · ")}</div>` : ""}
+        <ul><li><b>${A}</b>: ${keyLines(A)}</li><li><b>${H}</b>: ${keyLines(H)}</li></ul>
+        ${oA.length || oH.length ? `<div class="out">Out: ${[oA.length ? `${oA.join(", ")} (${A})` : "", oH.length ? `${oH.join(", ")} (${H})` : ""].filter(Boolean).join(" · ")}</div>` : ""}
+        <div class="acts"><button data-open="${i}">Props &amp; details</button><button data-watch="${g.id}">Watch it</button></div></div>`;
+    }).join("") || `<p class="dim">No games on this date.</p>`;
+    $("todayGames").querySelectorAll("button[data-open]").forEach((b) => (b.onclick = () => openFromSlate(+b.dataset.open)));
+    $("todayGames").querySelectorAll("button[data-watch]").forEach((b) => (b.onclick = () => {
+      selectGame(model.schedule.find((g) => g.id === b.dataset.watch));
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "watch"));
+      document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-watch"));
+      document.body.dataset.tab = "watch";
+      window.scrollTo(0, 0);
+    }));
+    document.querySelectorAll("#todayPlays button.add").forEach((b) => (b.onclick = () => addLeg(b.dataset.tk, { type: "prop", id: b.dataset.tid, stat: b.dataset.ts, side: b.dataset.tside, line: +b.dataset.tl })));
+    $("todayInfo").textContent = `${all.length} game${all.length === 1 ? "" : "s"}` + (slate.games.length < all.length ? ` · simulating ${slate.games.length + 1} of ${all.length}…` : ` · ${slate.n.toLocaleString()} simulations each`);
   }
 
   // ---------------- slate ----------------
@@ -1264,7 +1555,7 @@
   function runSlate() {
     if (!model) return;
     const date = $("dateSel").value, games = model.schedule.filter((g) => g.date === date && model.teams[g.away] && model.teams[g.home]);
-    if (!games.length) { $("slateInfo").textContent = "No games on this date."; $("slateOut").classList.add("hidden"); return; }
+    if (!games.length) { $("slateInfo").textContent = "No games on this date."; $("slateOut").classList.add("hidden"); slate = { date, n: 0, games: [] }; renderToday(); return; }
     const n = +$("slateN").value, t0 = performance.now();
     const run = { date, n, games: [] };
     slate = run; slateStale = false;
@@ -1274,8 +1565,9 @@
       $("btnSlate").disabled = false; $("slateProg").style.width = "100%";
       $("slateInfo").textContent = `${games.length} games × ${n.toLocaleString()} sims in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${fmtDay(date)}`;
       renderSlate();
+      renderToday();
     };
-    const store = (g, opts, res) => { if (slate === run) run.games.push({ g, opts, res }); };
+    const store = (g, opts, res) => { if (slate === run) { run.games.push({ g, opts, res }); if (activeTab() === "today") renderToday(); } };
     const next = () => {
       if (slate !== run) return; // a newer run started
       if (k >= games.length) return finish();
@@ -1284,7 +1576,7 @@
       try {
         if (!slateWorker) { slateWorker = new Worker("js/worker.js"); slateWorker.postMessage({ model }); }
         slateWorker.onmessage = (e) => {
-          if (e.data.progress != null) $("slateProg").style.width = (((k + e.data.progress) / games.length) * 100).toFixed(0) + "%";
+          if (e.data.progress != null) $("slateProg").style.width = $("todayProg").style.width = (((k + e.data.progress) / games.length) * 100).toFixed(0) + "%";
           if (e.data.done) { store(g, opts, e.data.result); k++; next(); }
         };
         slateWorker.postMessage({ run: true, opts, n });
@@ -1362,6 +1654,7 @@
     $("runInfo").textContent = `from the slate run · ${x.res.n.toLocaleString()} games`;
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "proj"));
     document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-proj"));
+    document.body.dataset.tab = "proj";
     renderProjections();
     window.scrollTo(0, 0);
   }
@@ -1410,13 +1703,13 @@
     rows.forEach((x) => (x.li = lineInfo(x.p, k, x.d, x.m)));
     if ($("slateSort").value === "edge") rows.sort((a, b) => (b.li.edge != null) - (a.li.edge != null) || (b.li.edge || 0) - (a.li.edge || 0) || b.m - a.m);
     else rows.sort((a, b) => b.m - a.m);
-    $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th>Avg min</th><th>Mean</th><th>Median</th><th>10th–90th</th><th>Line</th><th>Over</th><th>Under</th><th>Fair over</th><th>Fair under</th><th>Edge</th><th>Parlay</th></tr>` +
+    $("slateProps").innerHTML = `<tr><th>Player</th><th>Team</th><th class="adv">Avg min</th><th>Projection</th><th class="adv">Median</th><th class="adv">10th–90th</th><th>Line</th><th class="simp">Model's pick</th><th class="adv">Over</th><th class="adv">Under</th><th class="adv">Fair over</th><th class="adv">Fair under</th><th class="adv">Edge</th><th>Parlay</th></tr>` +
       rows.map((x) => {
         const L = x.li, oc = L.user && L.o >= 0.56 ? "edge-hi" : "", uc = L.user && L.u >= 0.56 ? "edge-lo" : "";
         const e = L.edge == null ? "" : `<span class="${L.edge > 0.035 ? (L.side === "O" ? "edge-hi" : "edge-lo") : L.edge > 0 ? "" : "dim"}">${L.edge > 0 ? "+" : ""}${(L.edge * 100).toFixed(1)}% ${L.side}</span>`;
-        return `<tr>${nameCell(x)}<td>${x.min.toFixed(1)}</td><td>${x.m.toFixed(1)}</td><td>${quant(x.d, 0.5)}</td><td>${quant(x.d, 0.1)}–${quant(x.d, 0.9)}</td>
-          <td><input data-key="${L.key}" type="number" step="0.5" value="${L.line}"></td>
-          <td class="${oc}">${pct(L.o)}</td><td class="${uc}">${pct(L.u)}</td><td>${american(L.o)}</td><td>${american(L.u)}</td><td>${e}</td>${slateAdd(x, L.line, false)}</tr>`;
+        return `<tr>${nameCell(x)}<td class="adv">${x.min.toFixed(1)}</td><td>${x.m.toFixed(1)}</td><td class="adv">${quant(x.d, 0.5)}</td><td class="adv">${quant(x.d, 0.1)}–${quant(x.d, 0.9)}</td>
+          <td><input data-key="${L.key}" type="number" step="0.5" value="${L.line}"></td><td class="simp">${pickLabel(L.o, L.u)}</td>
+          <td class="adv ${oc}">${pct(L.o)}</td><td class="adv ${uc}">${pct(L.u)}</td><td class="adv">${american(L.o)}</td><td class="adv">${american(L.u)}</td><td class="adv">${e}</td>${slateAdd(x, L.line, false)}</tr>`;
       }).join("");
     wireSlateAdd(k);
     $("slateProps").querySelectorAll("input").forEach((inp) => (inp.onchange = () => {

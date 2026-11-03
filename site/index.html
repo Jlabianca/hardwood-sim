@@ -12,8 +12,16 @@
     <span class="mark">◆</span> HARDWOOD SIM
     <span class="sub" id="dataLine">loading data…</span>
   </div>
+  <div class="hdrtools">
+    <input id="search" type="search" list="playerList" placeholder="🔍 Find a player" autocomplete="off">
+    <datalist id="playerList"></datalist>
+    <div class="modes" role="group" aria-label="Display mode">
+      <button id="modeSimple" class="mode">Simple</button><button id="modeAdv" class="mode">Advanced</button>
+    </div>
+  </div>
   <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="watch" role="tab">Watch a sim</button>
+    <button class="tab active" data-tab="today" role="tab">Today</button>
+    <button class="tab" data-tab="watch" role="tab">Watch a sim</button>
     <button class="tab" data-tab="slate" role="tab">Slate</button>
     <button class="tab" data-tab="proj" role="tab">Projections &amp; props</button>
     <button class="tab" data-tab="dvp" role="tab">Matchups</button>
@@ -36,8 +44,18 @@
 </section>
 
 <main>
+  <!-- TODAY -->
+  <section id="tab-today" class="pane active">
+    <div class="todayhead"><h2 id="todayTitle">Today</h2><span class="dim" id="todayInfo"></span><div class="progress"><i id="todayProg"></i></div></div>
+    <div id="todayFav"></div>
+    <div id="todayPlays"></div>
+    <h3 class="sec">Games</h3>
+    <div class="gcards" id="todayGames"></div>
+    <p class="note">Every number comes from simulating each game thousands of times. "Favorite plays" compare the model with each player's season average (or your own line, if you typed one), not with a sportsbook line. The model hasn't been shown to beat the books, so use these as a starting point for research, not as bets.</p>
+  </section>
+
   <!-- WATCH -->
-  <section id="tab-watch" class="pane active">
+  <section id="tab-watch" class="pane">
     <div class="board">
       <div class="score">
         <div class="trow" id="rowAway"><i class="bar"></i><span class="abbr"></span><span class="pts">0</span></div>
@@ -140,12 +158,12 @@
         <div><h3 id="marginTitle">Home margin distribution</h3><svg id="marginChart" viewBox="0 0 600 200"></svg></div>
         <div><h3>Total points distribution</h3><svg id="totalChart" viewBox="0 0 600 200"></svg></div>
       </div>
-      <div class="propbar">
+      <div class="propbar adv">
         <h3>Alt lines</h3>
         <label>Market <select id="ladMarket"></select></label>
         <span class="dim">The model's chance at every line. Type a book's price on any rung for its EV; O / U adds that rung to the parlay.</span>
       </div>
-      <div class="scrollx"><table class="props ladder" id="ladGame"></table></div>
+      <div class="scrollx adv"><table class="props ladder" id="ladGame"></table></div>
       <div class="propbar">
         <h3>Player props</h3>
         <label>Stat <select id="statSel">
