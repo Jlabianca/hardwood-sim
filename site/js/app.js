@@ -81,7 +81,7 @@
     const dates = [...new Set(model.schedule.map((g) => g.date))];
     const def = defaultDate(), t = todayET();
     $("dateSel").innerHTML = dates.map((d) => `<option value="${d}" ${d === def ? "selected" : ""}>${fmtDay(d)}${d === t ? " (today)" : ""}</option>`).join("");
-    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate") runSlate(); };
+    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate") runSlate(); if (activeTab() === "dvp") renderDvp(); };
     const teams = Object.keys(model.teams).sort();
     const opts = teams.map((t) => `<option>${t}</option>`).join("");
     $("awaySel").innerHTML = opts; $("homeSel").innerHTML = opts;
@@ -148,6 +148,8 @@
       document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
       document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "tab-" + t.dataset.tab));
       if (t.dataset.tab === "proj" && projStale) runProjections();
+      if (t.dataset.tab === "dvp") renderDvp();
+      if (t.dataset.tab === "track") renderTracker();
       if (t.dataset.tab === "slate" && (slateStale || !slate || slate.date !== $("dateSel").value)) runSlate();
     }));
   }
@@ -187,6 +189,7 @@
     $("btnPaste").onclick = applyPaste;
     initSgp();
     $("ladMarket").onchange = renderGameLadder;
+    $("dvpPos").onchange = $("dvpWin").onchange = $("dvpTonight").onchange = renderDvp;
     $("btnCsv").onclick = downloadCsv;
   }
   function fromHash() {
@@ -970,7 +973,7 @@
     if (!card) return;
     const { id, stat: k } = card, P = players[id];
     let mp = null; for (const t in model.teams) { const f = model.teams[t].players.find((x) => x.id === id); if (f) { mp = f; break; } }
-    const rows = (logs && logs[id]) || [];
+    const rows = (logs && logs.players && logs.players[id]) || [];
     const played = rows.filter((r) => !r[19]);
     const cur_ = played.filter((r) => r[3] === model.season);
     const sim = simFor(id, card.key);
@@ -1014,7 +1017,9 @@
     const cols = ["min", "pts", "reb", "ast", "fg3m", "stl", "blk", "tov"];
     const hlCols = COMBO[k] || [k];
     let lastYr = null;
-    const logRows = rows.slice().reverse().map((r) => {
+    const shown = rows.filter((r) => r[3] === model.season).concat(rows.filter((r) => r[3] !== model.season).slice(-15));
+    shown.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const logRows = shown.slice().reverse().map((r) => {
       let pre = "";
       if (r[3] !== lastYr) { pre = `<tr class="sep"><td colspan="14">${r[3] - 1}-${String(r[3]).slice(2)} season</td></tr>`; lastYr = r[3]; }
       const ha = r[2] ? "vs" : "@";
@@ -1033,6 +1038,8 @@
       <div class="charts2"><div><h4>Last ${bars.length} games · ${STAT_LBL[k]}</h4><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
         <div><h4>Model distribution tonight</h4>${sim ? `<svg id="pcHist" viewBox="0 0 600 200"></svg>` : `<p class="dim">Not simulated yet. Open the game on Projections or run the Slate.</p>`}</div></div>
       ${sim ? `<h4 class="lad">Alt-line ladder · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· type a book's price on any rung for its EV; O / U adds that rung to the parlay</span></h4><div class="scrollx"><table class="props ladder" id="pcLadder"></table></div>` : ""}
+      ${matchupLine(P, opp, k)}
+      ${wowyHtml(id, P, k, line, rows)}
       <div class="scrollx"><table class="log"><tr><th>Date</th><th>Opp</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>+/-</th>${COMBO[k] ? `<th>${k.toUpperCase()}</th>` : ""}</tr>${logRows || `<tr><td colspan="14" class="dim">No games in the data.</td></tr>`}</table></div>`;
     if (sim) {
       const d = sim.d[k], mean = meanOf(d), sd = Math.sqrt(meanOf(Array.from(d, (x) => (x - mean) ** 2)));
@@ -1064,6 +1071,130 @@
     if (e.target.id === "pcard") closeCard();
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && card) closeCard(); });
+
+  // ---------------- defense vs. position + teammate splits (player card, Matchups tab) ----------------
+  const POS_NAME = { G: "guards", F: "forwards", C: "centers" };
+  const DVP_LBL = { pts: "PTS", reb: "REB", ast: "AST", fg3m: "3PM", stl: "STL", blk: "BLK", pra: "PRA", min: "MIN" };
+  function matchupLine(P, opp, k) {
+    if (!opp || !model.dvp) return "";
+    const pos = P.pos, st = model.dvp.stats.includes(k) ? k : "pts";
+    const part = (win, lbl) => {
+      const W = model.dvp.windows[win]; if (!W) return "";
+      const t = W.teams[opp][pos], lg = W.league[pos][st];
+      if (!t || t[st] == null) return "";
+      const r = t.rank[st], cls = r <= 5 ? "edge-hi" : r >= 26 ? "edge-lo" : "";
+      return `${lbl}: <b>${t[st].toFixed(1)}</b> ${DVP_LBL[st]} per game to ${POS_NAME[pos]} (league ${lg.toFixed(1)}) · <span class="${cls}">rank ${r} of 30</span>`;
+    };
+    return `<div class="matchup"><b>Matchup</b> · ${opp} defense vs. ${POS_NAME[pos]} (1 = softest) — ${part("season", "this season")} &nbsp;|&nbsp; ${part("last25", "last 25 games")}</div>`;
+  }
+  function wowyHtml(id, P, k, line, rows) {
+    if (!logs || !logs.teams) return "";
+    const team = P.team, mates = model.teams[team].players.filter((x) => x.id !== id);
+    const outNow = outFor([team]);
+    mates.sort((a, b) => outNow.has(b.id) - outNow.has(a.id) || b.min - a.min);
+    const windowOf = {}; // teammate's time with this team, per season: [first, last] date
+    const win = (xid, season) => {
+      const key = xid + "|" + season;
+      if (!(key in windowOf)) {
+        const xr = ((logs.players[xid] || [])).filter((r) => r[20] === team && r[3] === season);
+        windowOf[key] = xr.length ? [xr[0][0], xr[xr.length - 1][0]] : null;
+      }
+      return windowOf[key];
+    };
+    const mine = rows.filter((r) => !r[19] && r[20] === team);
+    const out = [];
+    for (const X of mates.slice(0, 12)) {
+      const wi = [], wo = [];
+      for (const r of mine) {
+        const w = win(X.id, r[3]);
+        if (!w || r[0] < w[0] || r[0] > w[1]) continue; // he wasn't on the team yet / anymore
+        const played = (logs.teams[team] || {})[r[0]] || [];
+        (played.includes(X.id) ? wi : wo).push(r);
+      }
+      if (!wo.length) continue;
+      out.push({ X, wi, wo, out: outNow.has(X.id) });
+    }
+    if (!out.length) return `<h4 class="lad">With / without teammates</h4><p class="dim">No games in the data where one of his current teammates sat while he played.</p>`;
+    const a = (rs) => (rs.length ? meanOf(rs.map((r) => logVal(r, k))) : null);
+    const am = (rs) => (rs.length ? meanOf(rs.map((r) => r[4])) : null);
+    const f1 = (x) => (x == null ? "–" : x.toFixed(1));
+    return `<h4 class="lad">With / without teammates · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· games this player played, split by whether the teammate played (this season + last season, while they were teammates)</span></h4>
+      <div class="scrollx"><table class="props"><tr><th>Teammate</th><th>Tonight</th><th>Games without</th><th>Avg without</th><th>Avg with</th><th>Difference</th><th>Min without / with</th><th>Over ${line} without</th></tr>` +
+      out.map((o) => {
+        const aw = a(o.wo), ah = a(o.wi), diff = aw != null && ah != null ? aw - ah : null;
+        const hit = o.wo.filter((r) => logVal(r, k) > line).length;
+        const dcls = diff == null ? "" : diff >= 2 ? "edge-hi" : diff <= -2 ? "edge-lo" : "";
+        return `<tr><td>${o.X.name}<span class="pos">${o.X.pos}</span></td><td>${o.out ? '<span class="st">out</span>' : ""}</td><td>${o.wo.length}</td><td>${f1(aw)}</td><td>${f1(ah)}</td>
+          <td class="${dcls}">${diff == null ? "–" : (diff > 0 ? "+" : "") + diff.toFixed(1)}</td><td>${f1(am(o.wo))} / ${f1(am(o.wi))}</td><td>${hit}/${o.wo.length}</td></tr>`;
+      }).join("") + `</table></div><p class="dim" style="font-size:12px">Small samples swing a lot: treat fewer than ~5 games as a hint, not a number.</p>`;
+  }
+  let dvpSort = { col: "pts", dir: -1 };
+  function renderDvp() {
+    if (!model.dvp) return;
+    const pos = $("dvpPos").value, win = $("dvpWin").value, W = model.dvp.windows[win];
+    const date = $("dateSel").value, oppOf = {};
+    for (const g of model.schedule) if (g.date === date) { oppOf[g.away] = `@ ${g.home}`; oppOf[g.home] = `vs ${g.away}`; }
+    let teams = Object.keys(W.teams);
+    if ($("dvpTonight").checked && Object.keys(oppOf).length) teams = teams.filter((t) => oppOf[t]);
+    const cols = model.dvp.stats.concat(["min"]);
+    const c = dvpSort.col;
+    teams.sort((a, b) => dvpSort.dir * ((W.teams[a][pos][c] || 0) - (W.teams[b][pos][c] || 0)));
+    const lg = W.league[pos];
+    $("dvpTable").innerHTML = `<tr><th data-c="team">Defense</th><th>Games</th><th title="the team this defense plays on the selected date">Plays</th>${cols.map((x) => `<th data-c="${x}" class="${x === c ? "sorted" : ""}">${DVP_LBL[x]}${x === c ? (dvpSort.dir < 0 ? " ▾" : " ▴") : ""}</th>`).join("")}</tr>` +
+      teams.map((t) => {
+        const T = W.teams[t][pos];
+        return `<tr><td><span class="teamtag" style="background:${col(t)}"></span>${t}</td><td>${W.teams[t].n}</td><td class="dim">${oppOf[t] || ""}</td>` +
+          cols.map((x) => { const r = T.rank[x]; return `<td class="${x === "min" ? "" : r <= 5 ? "soft" : r >= 26 ? "tough" : ""}">${T[x] == null ? "–" : T[x].toFixed(1)}<span class="rk">${r}</span></td>`; }).join("") + "</tr>";
+      }).join("") +
+      `<tr><td class="dim">League avg</td><td></td><td></td>${cols.map((x) => `<td class="dim">${lg[x] == null ? "–" : lg[x].toFixed(1)}</td>`).join("")}</tr>`;
+    $("dvpTable").querySelectorAll("th[data-c]").forEach((th) => (th.onclick = () => {
+      const col_ = th.dataset.c; if (col_ === "team") return;
+      dvpSort = { col: col_, dir: dvpSort.col === col_ ? -dvpSort.dir : -1 };
+      renderDvp();
+    }));
+  }
+
+  // ---------------- tracker ----------------
+  let tracker = null;
+  function renderTracker() {
+    const go = (T) => {
+      tracker = T;
+      if (!T || !T.summary || !T.summary.days) {
+        $("trackOut").innerHTML = `<p class="dim">Nothing graded yet${T && T.pending ? ` — projections for ${fmtDay(T.pending.date)} are saved and will be graded tomorrow morning` : ""}.</p>`;
+        return;
+      }
+      const S = T.summary, p1 = (x) => (x == null ? "–" : (x * 100).toFixed(1) + "%"), f2 = (x) => (x == null ? "–" : x.toFixed(2));
+      const cards = [
+        ["Days graded", S.days, `${S.games} games`],
+        ["Winners picked", p1(S.winner_pct), "team the model favored"],
+        ["Win-prob Brier", f2(S.brier), "lower is better · coin flip = 0.25"],
+        ["Margin error", f2(S.margin_mae), "average miss, points"],
+        ["Total error", f2(S.total_mae), `bias ${S.total_bias > 0 ? "+" : ""}${f2(S.total_bias)} (model minus actual)`],
+      ];
+      const SL = { pts: "Points", reb: "Rebounds", ast: "Assists", fg3m: "3-pointers", pra: "Pts+Reb+Ast" };
+      const statRows = Object.entries(T.stats).map(([k, v]) => `<tr><td>${SL[k]}</td><td>${v.n.toLocaleString()}</td><td>${f2(v.mae)}</td><td>${v.bias > 0 ? "+" : ""}${f2(v.bias)}</td></tr>`).join("");
+      const bucketRows = Object.entries(T.stats).flatMap(([k, v]) => v.buckets.map((b) => {
+        const gap = b.hit - b.said, cls = b.n >= 30 ? (gap >= 0.02 ? "edge-hi" : gap <= -0.04 ? "edge-lo" : "") : "dim";
+        return `<tr><td>${SL[k]}</td><td>${b.bucket}</td><td>${b.n}</td><td>${p1(b.said)}</td><td class="${cls}">${p1(b.hit)}</td></tr>`;
+      })).join("");
+      const calRows = T.calibration.map((c) => `<tr><td>${c.bucket}</td><td>${c.n}</td><td>${p1(c.said)}</td><td>${p1(c.won)}</td></tr>`).join("");
+      const dayRows = T.days.map((d) => `<tr><td>${fmtDay(d.date)}${d.backfill ? ' <span class="dim">backfill</span>' : ""}</td><td>${d.games}</td><td>${d.right}/${d.games}</td><td>${f2(d.brier)}</td><td>${f2(d.margin_mae)}</td><td>${f2(d.total_mae)}</td><td>${d.pts_mae == null ? "–" : f2(d.pts_mae)}</td></tr>`).join("");
+      $("trackOut").innerHTML = `<div class="cards">${cards.map(([a, b2, c]) => `<div class="card"><div class="k">${a}</div><div class="v">${b2}</div><div class="s">${c}</div></div>`).join("")}</div>
+        ${T.pending ? `<p class="dim">Saved and waiting to be graded: ${fmtDay(T.pending.date)} (${T.pending.games} games).</p>` : ""}
+        <div class="charts">
+          <div><h3>Player projections</h3><table class="props"><tr><th>Stat</th><th>Player-games</th><th>Avg miss</th><th>Bias</th></tr>${statRows}</table>
+            <p class="dim" style="font-size:12px">Bias = model minus actual; positive means the model ran high.</p></div>
+          <div><h3>Win probability: said vs. happened</h3><table class="props"><tr><th>Model gave the favorite</th><th>Games</th><th>Said</th><th>Won</th></tr>${calRows}</table></div>
+        </div>
+        <h3 class="sec" style="margin-top:16px">Are the model's leans worth anything? <span class="dim">· the "line" here is the player's season average before the game, rounded to x.5, a stand-in for a book line · when the model leaned one way by this much, how often was it right</span></h3>
+        <div class="scrollx"><table class="props"><tr><th>Stat</th><th>Model's lean</th><th>Picks</th><th>Model said</th><th>Hit</th></tr>${bucketRows}</table></div>
+        <p class="dim" style="font-size:12px">Green = hit more often than the model said (with 30+ picks), red = noticeably less. At −110 you need 52.4% to break even. Real sportsbook lines are sharper than season averages, so these hit rates are an upper bound on what you'd see against a book.</p>
+        <h3 class="sec" style="margin-top:16px">By day</h3>
+        <div class="scrollx"><table class="props"><tr><th>Date</th><th>Games</th><th>Winners</th><th>Brier</th><th>Margin miss</th><th>Total miss</th><th>Points miss</th></tr>${dayRows}</table></div>`;
+    };
+    if (tracker) return go(tracker);
+    fetch("data/tracker.json").then((r) => (r.ok ? r.json() : null)).then(go).catch(() => go(null));
+  }
 
   // ---------------- multi-game parlay slip ----------------
   function resultFor(key) {

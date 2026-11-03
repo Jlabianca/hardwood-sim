@@ -187,6 +187,10 @@ table.ladder input { width: 70px; }
 table.ladder tr.mine td { background: #17202b; }
 table.ladder tr.mine td:first-child { color: var(--accent); }
 .mbox h4.lad { margin-top: 14px; }
+.rk { font-size: 10px; color: var(--dim); margin-left: 4px; }
+td.soft { color: var(--good); } td.tough { color: var(--bad); }
+#dvpTable th { cursor: pointer; } #dvpTable th.sorted { color: var(--accent); }
+.mbox .matchup { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-top: 10px; font-size: 13px; }
 footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--line); margin-top: 20px; }
 
 @media (max-width: 860px) {

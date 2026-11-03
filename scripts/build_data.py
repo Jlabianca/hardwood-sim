@@ -41,7 +41,10 @@ INJURIES_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/inj
 
 RATE_HALF_LIFE = 15.0     # games; recency decay for per-minute player rates
 MIN_HALF_LIFE = 4.0       # games; recency decay for minutes
-PRIOR_GAME_W = 0.30       # weight of a prior-season game in player rates
+PRIOR_GAME_W = 0.30       # weight of a prior-season game (shot zones; volume rates before any current games)
+PRIOR_EFF_W = float(os.environ.get("HW_PRIOR_EFF_W", 0.30))   # prior-season game weight for shooting percentages
+PRIOR_FADE = float(os.environ.get("HW_PRIOR_FADE", 8.0))      # volume rates: prior weight halves after this many current games
+OLD_PRIOR = os.environ.get("HW_OLD_PRIOR") == "1"             # backtest switch: the original constant prior weight
 PRIOR_MIN_GAMES = 1.5     # prior-season minutes count as this many current games
 RATE_SHRINK_MIN = 15.0    # minutes of league-average (by position) added to every player's rates
 TEAM_HALF_LIFE = 10.0     # games; recency decay for team pace/defense
@@ -156,12 +159,52 @@ def rest_effects(tb):
     return out
 
 
+DVP_STATS = ["pts", "reb", "ast", "fg3m", "stl", "blk", "pra"]
+
+
+def defense_vs_position(pb, season, teams):
+    """What each defense allows to guards / forwards / centers per game, this season and over its last 25 games
+    (which reaches into last season early on). Ranks: 1 = allows the most (softest matchup)."""
+    d = pb[pb["played"]].copy()
+    d["reb"] = d["oreb"] + d["dreb"]
+    d["pra"] = d["pts"] + d["reb"] + d["ast"]
+    d = d[d["opponent_team_abbreviation"].isin(teams.keys())]
+    per = d.groupby(["opponent_team_abbreviation", "game_id", "game_date", "yr", "pos"])[DVP_STATS + ["min"]].sum().reset_index()
+    games = d.groupby(["opponent_team_abbreviation", "game_id", "game_date", "yr"]).size().reset_index()[["opponent_team_abbreviation", "game_id", "game_date", "yr"]]
+    out = {"windows": {}, "stats": DVP_STATS}
+    for win in ("season", "last25"):
+        res = {}
+        for t in teams:
+            gt = games[games["opponent_team_abbreviation"] == t].sort_values("game_date")
+            gt = gt[gt["yr"] == season] if win == "season" else gt.tail(25)
+            ids = set(gt["game_id"])
+            n = len(ids)
+            rows = per[(per["opponent_team_abbreviation"] == t) & per["game_id"].isin(ids)]
+            res[t] = {"n": n}
+            for pos in ("G", "F", "C"):
+                r = rows[rows["pos"] == pos]
+                res[t][pos] = {s: round(float(r[s].sum()) / n, 2) if n else None for s in DVP_STATS + ["min"]}
+        # league average and ranks per position/stat
+        lg = {}
+        for pos in ("G", "F", "C"):
+            lg[pos] = {}
+            for s in DVP_STATS + ["min"]:
+                vals = [res[t][pos][s] for t in teams if res[t][pos][s] is not None]
+                lg[pos][s] = round(float(np.mean(vals)), 2) if vals else None
+                order = sorted([t for t in teams if res[t][pos][s] is not None], key=lambda t: -res[t][pos][s])
+                for i, t in enumerate(order):
+                    res[t][pos].setdefault("rank", {})[s] = i + 1
+        out["windows"][win] = {"teams": res, "league": lg}
+    return out
+
+
 LOG_COLS = ["min", "pts", "oreb", "dreb", "ast", "fg3m", "stl", "blk", "tov", "fgm", "fga", "fg3a", "ftm", "fta"]
 
 
 def write_logs(pb, season, teams, path):
-    """Per player: every current-season game (DNPs included, with the reason) and the last 15 of last season.
-    Row: [date, opp, home(1/0), season, min, pts, reb, ast, 3pm, stl, blk, tov, fgm, fga, 3pa, ftm, fta, +/-, start(1/0), dnp_reason]."""
+    """Per player: every current-season game (DNPs included, with the reason) and every game of last season.
+    Row: [date, opp, home(1/0), season, min, pts, reb, ast, 3pm, stl, blk, tov, fgm, fga, 3pa, ftm, fta, +/-, start(1/0), dnp_reason, team].
+    Also, per team: for each game, who played (for with/without teammate splits)."""
     ids = {p["id"] for t in teams.values() for p in t["players"]}
     d = pb[pb["athlete_id"].isin(ids)].copy()
     d = d[d["played"] | (d["yr"] == season) & (d["did_not_play"].fillna(False).astype(bool))]
@@ -170,7 +213,7 @@ def write_logs(pb, season, teams, path):
     out = {}
     for pid, g in d.groupby("athlete_id"):
         cur_ = g[g["yr"] == season]
-        prev = g[(g["yr"] == season - 1) & g["played"]].tail(15)
+        prev = g[(g["yr"] == season - 1) & g["played"]]
         rows = []
         for _, r in pd.concat([prev, cur_]).iterrows():
             played = bool(r["played"])
@@ -178,12 +221,18 @@ def write_logs(pb, season, teams, path):
                 r["game_date"], r["opponent_team_abbreviation"], 1 if r["home_away"] == "home" else 0, int(r["yr"]),
                 int(r["min"]), int(r["pts"]), int(r["oreb"] + r["dreb"]), int(r["ast"]), int(r["fg3m"]), int(r["stl"]), int(r["blk"]),
                 int(r["tov"]), int(r["fgm"]), int(r["fga"]), int(r["fg3a"]), int(r["ftm"]), int(r["fta"]), int(r["pm_i"]) if played else 0,
-                1 if bool(r["starter"]) else 0, "" if played else str(r["reason"] or "DNP").title(),
+                1 if bool(r["starter"]) else 0, "" if played else str(r["reason"] or "DNP").title(), r["team_abbreviation"],
             ])
         out[pid] = rows
+    # team game rosters: team -> {date: [ids who played]}, both seasons
+    tg = {}
+    pl = pb[pb["played"]]
+    for (t, gd), g in pl.groupby(["team_abbreviation", "game_date"]):
+        tg.setdefault(t, {})[gd] = sorted(g["athlete_id"].tolist())
+    out = {"players": out, "teams": tg}
     with open(path, "w") as fh:
         json.dump(out, fh, separators=(",", ":"))
-    print(f"wrote {path}: game logs for {len(out)} players")
+    print(f"wrote {path}: game logs for {len(out['players'])} players, {len(tg)} teams")
 
 
 def main():
@@ -290,7 +339,11 @@ def main():
     teams_meta = {}
     gp_by_team = tb[tb["yr"] == season].groupby("team_abbreviation")["game_id"].nunique().sort_values(ascending=False)
     real = set(gp_by_team.index[:30])  # drops All-Star / exhibition teams
-    for _, r in tb[(tb["yr"] == season) & tb["team_abbreviation"].isin(real)].drop_duplicates("team_abbreviation").iterrows():
+    if len(real) < 30:  # opening days: teams that haven't played yet come from last season
+        prev_gp = tb[tb["yr"] == season - 1].groupby("team_abbreviation")["game_id"].nunique().sort_values(ascending=False)
+        real = real | set(prev_gp.index[:30])
+    tb_meta = tb[tb["team_abbreviation"].isin(real)].sort_values("yr", ascending=False)
+    for _, r in tb_meta.drop_duplicates("team_abbreviation").iterrows():
         teams_meta[r["team_abbreviation"]] = {
             "name": r["team_display_name"], "short": r["team_short_display_name"],
             "color": "#" + str(r["team_color"] or "888888"), "alt": "#" + str(r["team_alternate_color"] or "888888"), "id": r["team_id"],
@@ -306,10 +359,11 @@ def main():
             team_of[pid] = r["team_abbreviation"]
             roster_names[pid] = r["display_name"]
             roster_pos[pid] = pos_group(r.get("position_abbreviation"))
-    else:  # as-of builds: a player's team is the team of his latest game in the current season
-        lc = cur.sort_values("game_date").groupby("athlete_id").tail(1)
+    else:  # as-of builds: a player's team is the team of his latest game this season (or last season, if none yet)
+        lc = pb.sort_values("game_date").groupby("athlete_id").tail(1)
         for _, r in lc.iterrows():
-            team_of[r["athlete_id"]] = id2abbr.get(str(r["team_id"]), r["team_abbreviation"])
+            if r["yr"] == season or not (cur["team_id"] == r["team_id"]).any():
+                team_of[r["athlete_id"]] = id2abbr.get(str(r["team_id"]), r["team_abbreviation"])
 
     # ---------------- per-player rates ----------------
     pb = pb.sort_values("game_date")
@@ -354,7 +408,14 @@ def main():
         dpl = d[d["played"]]
         kc = np.arange((dpl["yr"] == season).sum())[::-1]
         kp = np.arange((dpl["yr"] == season - 1).sum())[::-1]
-        w = np.concatenate([PRIOR_GAME_W * 0.5 ** (kp / 40.0), 0.5 ** (kc / RATE_HALF_LIFE)])
+        # early season: last season fades out of the *volume* rates (shots, trips, assists, boards) as current
+        # games come in, since roles change; shooting percentages keep more of last season (a hot week is mostly noise)
+        nc = len(kc)
+        vol_pw = PRIOR_GAME_W if OLD_PRIOR else PRIOR_GAME_W / (1.0 + nc / PRIOR_FADE)
+        eff_pw = PRIOR_GAME_W if OLD_PRIOR else PRIOR_EFF_W
+        cur_w = 0.5 ** (kc / RATE_HALF_LIFE)
+        w = np.concatenate([vol_pw * 0.5 ** (kp / 40.0), cur_w])
+        w_eff = np.concatenate([eff_pw * 0.5 ** (kp / 40.0), cur_w])
         dpl = pd.concat([dpl[dpl["yr"] == season - 1], dpl[dpl["yr"] == season]])
         wmin = float((dpl["min"].values * w).sum())
         pr = pos_rates.get(pos, pos_rates["F"])
@@ -366,7 +427,7 @@ def main():
             rate[c] = (tot + pr[c] * RATE_SHRINK_MIN) / (wmin + RATE_SHRINK_MIN)
         # shooting percentages (shrunk toward league/position)
         def wsum(c):
-            return float((dpl[c].values * w).sum())
+            return float((dpl[c].values * w_eff).sum())
         fg3a, fg3m, fta, ftm = wsum("fg3a"), wsum("fg3m"), wsum("fta"), wsum("ftm")
         fg2a, fg2m = wsum("fga") - fg3a, wsum("fgm") - fg3m
         lg3 = league_zone["three_pct"]
@@ -478,9 +539,9 @@ def main():
     lg = {c: float(tbc[c].mean()) for c in ["pace", "o_efg", "o_tov", "o_orb", "o_ftr", "o_3par", "ortg"]}
     lg_pts = float(tbc["team_score"].mean())
     lg_poss = float((tbc["poss"] * 48 / tbc["gmins"]).mean())
-    if len(tbc) < 300:  # early season: blend in last season's league environment
+    if len(tbc) < 150:  # early season: blend in last season's league environment (fully current after ~75 games)
         tbp = tb[tb["yr"] == season - 1]
-        wc = len(tbc) / 300
+        wc = len(tbc) / 150
         for c in lg:
             lg[c] = wc * lg[c] + (1 - wc) * float(tbp[c].mean())
         lg_pts = wc * lg_pts + (1 - wc) * float(tbp["team_score"].mean())
@@ -535,7 +596,10 @@ def main():
         "pf_per_min": round(float(lpc["pf"].sum() / m), 5),
         "zone": {k: round(v, 4) for k, v in league_zone.items()},
         "extra_foul": 0.065,
-        "load_k": 0.35,       # efficiency bonus/penalty per log-unit of lineup shot creation vs league  # non-shooting fouls per possession (foul-outs only)
+        "load_k": 0.35,       # efficiency bonus/penalty per log-unit of lineup shot creation vs league
+        # nightly form (SD, log scale): shot volume, shooting (relative to teammates), rebounding, passing.
+        # tuned on the 2025-26 backtest so prop probabilities match how often leans actually hit
+        "var_use": 0.25, "var_eff": 0.35, "var_reb": 0.7, "var_ast": 0.7,  # non-shooting fouls per possession (foul-outs only)
         "home_edge": 0.035,
         "home_margin": round(float(home_margin), 2),
         "rest": rest,
@@ -613,6 +677,9 @@ def main():
                 p["out"] = p["absent"] or p["status"].startswith("DNP last game")
             p.pop("absent"); p.pop("missed3")
 
+    # ---------------- defense vs. position ----------------
+    dvp = defense_vs_position(pb, season, teams)
+
     # ---------------- game logs (for the player cards; loaded by the page only when a card opens) ----------------
     write_logs(pb, season, teams, os.path.join(os.path.dirname(a.out) or ".", "logs.json"))
 
@@ -620,7 +687,7 @@ def main():
         "season": season, "season_label": f"{season - 1}-{str(season)[2:]}",
         "through": through, "asof": a.asof, "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "injury_source": "espn" if inj_n else "last-game DNPs",
-        "league": league, "teams": teams, "schedule": schedule,
+        "league": league, "teams": teams, "schedule": schedule, "dvp": dvp,
     }
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     with open(a.out, "w") as fh:

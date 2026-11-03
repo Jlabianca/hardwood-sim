@@ -143,6 +143,18 @@
       for (const p of t.ps) { s0 += p.target; p.gt = p.target * Math.exp(0.12 * rng.normal()); s1 += p.gt; }
       for (const p of t.ps) p.gt *= s0 / s1;
     }
+    // per-game form: some nights a player looks for his shot more, some nights it falls more (hot/cold)
+    const VU = L.var_use || 0, VE = L.var_eff || 0, VR = L.var_reb || 0, VA = L.var_ast || 0;
+    const lgn = (v) => (v ? Math.exp(v * rng.normal() - v * v / 2) : 1);
+    for (const t of tm) {
+      let sw = 0, se = 0;
+      for (const p of t.ps) {
+        p.gu = lgn(VU); p.ge = VE ? VE * rng.normal() : 0; p.gr = lgn(VR); p.ga = lgn(VA);
+        const w = p.fga * p.target; sw += w; se += w * p.ge;
+      }
+      // shooting form is relative to teammates: the team's overall shooting night is left to the game itself
+      if (VE && sw > 0) for (const p of t.ps) p.ge -= se / sw;
+    }
 
     const box = tm.map((t) => t.ps.map(() => { const o = {}; for (const k of STAT_KEYS) o[k] = 0; return o; }));
     const score = [0, 0], qs = [[], []];
@@ -252,7 +264,7 @@
       const side = off ? o : d;
       let who = -1;
       if (rng() < L.reb_credit / (isFt ? 1 : 0.97)) {
-        who = pickOn(side, (p) => Math.pow(off ? p.oreb : p.dreb, G_REB));
+        who = pickOn(side, (p) => Math.pow(off ? p.oreb : p.dreb, G_REB) * p.gr);
         box[side][who][off ? "oreb" : "dreb"]++;
       }
       if (ev) ev.reb = { side, who: who >= 0 ? tm[side].ps[who].id : null, off };
@@ -306,7 +318,7 @@
         chance++;
         const ev = log ? { side: o } : null;
         // who ends this chance, and how
-        const w = on[o].map((i) => { const p = tm[o].ps[i]; return p.fga + p.trip + p.tov; });
+        const w = on[o].map((i) => { const p = tm[o].ps[i]; return (p.fga + p.trip + p.tov) * p.gu; });
         // usage load: a lineup with less shot creation than usual has to stretch, and gets less efficient
         let load = 0; for (const x of w) load += x;
         load = load / (5 * LR.use);
@@ -347,7 +359,7 @@
           zone = rng() < clamp(rs, 0.05, 0.97) ? "rim" : "mid";
         }
         let base = zone === "three" ? p.p3 : zone === "rim" ? p.prim : p.pmid;
-        let lg = logit(clamp(base, 0.05, 0.95)) + effBase + 4.0 * (D.d_efg || 0) + loadAdj + restAdj[o];
+        let lg = logit(clamp(base, 0.05, 0.95)) + effBase + 4.0 * (D.d_efg || 0) + loadAdj + restAdj[o] + p.ge;
         // lineup defense: the five defenders vs. the team's usual defense, plus the man guarding the shooter
         let dSum = 0; for (const j of on[d]) dSum += tm[d].ps[j].d;
         const guard = mu[o][actor];
@@ -366,7 +378,7 @@
           const pa = (zone === "three" ? 0.92 : zone === "rim" ? 0.63 : 0.51) * (L.ast_per_fgm / 0.62) *
             Math.pow(lineupSum(o, "ast") / Math.max(1e-6, 5 * LR.ast), 0.5) * (chance > 1 ? 0.35 : 1);
           if (rng() < clamp(pa, 0, 0.95)) {
-            const a = pickOn(o, (x) => Math.pow(x.ast, G_AST), actor); box[o][a].ast++;
+            const a = pickOn(o, (x) => Math.pow(x.ast, G_AST) * x.ga, actor); box[o][a].ast++;
             if (ev) ev.ast = tm[o].ps[a].id;
           }
           // and-one

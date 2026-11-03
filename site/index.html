@@ -16,6 +16,8 @@
     <button class="tab active" data-tab="watch" role="tab">Watch a sim</button>
     <button class="tab" data-tab="slate" role="tab">Slate</button>
     <button class="tab" data-tab="proj" role="tab">Projections &amp; props</button>
+    <button class="tab" data-tab="dvp" role="tab">Matchups</button>
+    <button class="tab" data-tab="track" role="tab">Tracker</button>
     <button class="tab" data-tab="roster" role="tab">Injuries / minutes</button>
   </nav>
 </header>
@@ -182,6 +184,23 @@
       </div>
     </div>
     <p class="note">Probabilities come from replaying the game possession by possession, over and over. The model is a simple simulation and hasn't been shown to beat the market. Treat a gap between the model and a line as a reason to dig in, not as a bet.</p>
+  </section>
+
+  <!-- DEFENSE VS POSITION -->
+  <section id="tab-dvp" class="pane">
+    <div class="controls">
+      <label>Position <select id="dvpPos"><option value="G">Guards</option><option value="F">Forwards</option><option value="C">Centers</option></select></label>
+      <label>Window <select id="dvpWin"><option value="season">This season</option><option value="last25">Last 25 games</option></select></label>
+      <label class="chk"><input type="checkbox" id="dvpTonight" checked> only teams playing on the selected date</label>
+    </div>
+    <p class="dim">What each defense allows per game to opposing guards, forwards or centers (all players at that position added up). Rank 1 = allows the most, the softest matchup. Green = top 5 softest, red = 5 toughest. Click a column to sort. Early in the season, "Last 25 games" reaches back into last season for a bigger sample.</p>
+    <div class="scrollx"><table class="props" id="dvpTable"></table></div>
+  </section>
+
+  <!-- TRACKER -->
+  <section id="tab-track" class="pane">
+    <p class="dim" id="trackIntro">How the model has actually done. Every morning and again before tip-off, the daily update saves that day's projections (with the injury report at the time); the next morning it grades them against the real box scores. Days marked "backfill" were re-created afterwards from data available before each game, using who actually sat.</p>
+    <div id="trackOut"><p class="dim">Loading…</p></div>
   </section>
 
   <!-- ROSTER -->
