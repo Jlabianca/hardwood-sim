@@ -45,6 +45,8 @@
       if (leg.type === "ml") out[i] = (leg.side === "home" ? m : -m) > 0 ? 1 : -1;
       else if (leg.type === "spread") out[i] = cmp((leg.side === "home" ? m : -m) + leg.line, 0, true);
       else if (leg.type === "total") out[i] = cmp(t, leg.line, leg.side === "o");
+      else if (leg.type === "ttotal") out[i] = cmp(leg.team === "home" ? r.home[i] : r.away[i], leg.line, leg.side === "o");
+      else if (leg.type === "h1total") out[i] = cmp(r.home1h[i] + r.away1h[i], leg.line, leg.side === "o");
     }
     return out;
   }

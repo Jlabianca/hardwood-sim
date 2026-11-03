@@ -186,6 +186,7 @@
     $("btnSlateCsv").onclick = slateCsv;
     $("btnPaste").onclick = applyPaste;
     initSgp();
+    $("ladMarket").onchange = renderGameLadder;
     $("btnCsv").onclick = downloadCsv;
   }
   function fromHash() {
@@ -214,6 +215,7 @@
     // elapsed game seconds for every event (for the flow chart)
     for (const e of game.events) e.el = e.q <= 4 ? (e.q - 1) * 720 + (720 - e.t) : 2880 + (e.q - 5) * 300 + (300 - e.t);
     game.len = 2880 + game.ot * 300;
+    addWinProb(game);
     idx = -1;
     $("finalBox").classList.add("hidden");
     drawCourtBase();
@@ -234,6 +236,7 @@
     renderOnCourt(game.events[0], liveBox(-1));
     renderLine(-1);
     drawFlow(-1);
+    drawWP(-1);
   }
   function setRow(id, abbr, pts) {
     const r = $(id);
@@ -365,6 +368,7 @@
     renderOnCourt(e, liveBox(i), e.pid);
     renderLine(i);
     drawFlow(i);
+    drawWP(i);
     drawEvent(i, animate);
   }
 
@@ -514,6 +518,57 @@
     $("flow").innerHTML = h;
   }
 
+  // ---------------- win probability ----------------
+  /* Home win chance from the margin, time left and the pre-game edge: the margin still to come is roughly normal,
+     with mean = pre-game expected margin x share of the game left and SD = full-game SD x sqrt(share left).
+     The pre-game edge and SD come from 400 quick simulations of this matchup with the same settings. */
+  const wpCache = {};
+  function wpParams() {
+    const o = simOpts({ seed: 777 });
+    const key = JSON.stringify([o.away, o.home, o.out.slice().sort(), o.minutes, o.neutral, o.rest]);
+    if (!wpCache[key]) {
+      const a = NBASim.simulateMany(model, o, 400);
+      const m = Array.from(a.home, (h, i) => h - a.away[i]), mu = meanOf(m);
+      wpCache[key] = { mu, sd: Math.max(6, Math.sqrt(meanOf(m.map((x) => (x - mu) ** 2)))) };
+    }
+    return wpCache[key];
+  }
+  function normCdf(z) { // Abramowitz-Stegun
+    const t = 1 / (1 + 0.2316419 * Math.abs(z)), d = 0.3989423 * Math.exp(-z * z / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - p : p;
+  }
+  function addWinProb(g) {
+    const { mu, sd } = wpParams();
+    for (const e of g.events) {
+      const left = e.q <= 4 ? (4 - e.q) * 720 + e.t : e.t; // seconds left in regulation, or in this overtime
+      const share = left / 2880, margin = e.score[1] - e.score[0];
+      if (e.kind === "endq" && e.q >= 4 && margin !== 0) { e.wp = margin > 0 ? 1 : 0; continue; }
+      if (share <= 0) { e.wp = margin > 0 ? 1 : margin < 0 ? 0 : 0.5; continue; }
+      e.wp = normCdf((margin + mu * share) / (sd * Math.sqrt(share)));
+    }
+    g.wp0 = normCdf(mu / sd);
+  }
+  function drawWP(i) {
+    const W = 1000, H = 90, top = 8, bot = 8, X = (el) => (el / game.len) * W, Y = (p) => top + (1 - p) * (H - top - bot); // top = away wins
+    let h = "";
+    for (let q = 1; q * 720 < game.len; q++) { const xq = q <= 4 ? X(q * 720) : X(2880 + (q - 4) * 300); if (xq < W) h += `<line x1="${xq}" x2="${xq}" y1="0" y2="${H}" stroke="#1d2a38"/>`; }
+    for (const g of [0.25, 0.75]) h += `<line x1="0" x2="${W}" y1="${Y(g)}" y2="${Y(g)}" stroke="#16212d" stroke-dasharray="3 5"/>`;
+    h += `<line x1="0" x2="${W}" y1="${Y(0.5)}" y2="${Y(0.5)}" stroke="#2a3a4c"/>`;
+    h += `<text x="6" y="17" fill="${col(cur.away)}" font-family="monospace" font-size="11">${cur.away} WIN %</text><text x="6" y="${H - 12}" fill="${col(cur.home)}" font-family="monospace" font-size="11">${cur.home} WIN %</text>`;
+    let pts = `0,${Y(game.wp0).toFixed(1)}`, last = game.wp0, lastX = 0;
+    for (let k = 0; k <= i; k++) { const e = game.events[k]; lastX = X(e.el); last = e.wp; pts += ` ${lastX.toFixed(1)},${Y(e.wp).toFixed(1)}`; }
+    const mid = Y(0.5);
+    h += `<clipPath id="wa"><rect x="0" y="0" width="${W}" height="${mid}"/></clipPath><clipPath id="wh"><rect x="0" y="${mid}" width="${W}" height="${H - mid}"/></clipPath>`;
+    h += `<polygon points="0,${mid} ${pts} ${lastX},${mid}" fill="${col(cur.away)}" opacity=".3" clip-path="url(#wa)"/>`;
+    h += `<polygon points="0,${mid} ${pts} ${lastX},${mid}" fill="${col(cur.home)}" opacity=".3" clip-path="url(#wh)"/>`;
+    h += `<polyline points="${pts}" fill="none" stroke="#e8eef5" stroke-width="1.6"/>`;
+    h += `<circle cx="${lastX}" cy="${Y(last)}" r="3.5" fill="#ff8a3d"/>`;
+    $("wpChart").innerHTML = h;
+    const lead = last >= 0.5 ? [cur.home, last] : [cur.away, 1 - last];
+    $("wpTag").innerHTML = `<span style="color:${col(lead[0])}">${lead[0]}</span> ${lead[1] >= 0.995 && lead[1] < 1 ? ">99" : Math.round(lead[1] * 100)}% WIN`;
+  }
+
   // ---------------- final box ----------------
   function showFinal() {
     if (!game) return;
@@ -623,6 +678,7 @@
     sgpFillPlayers();
     renderSgp();
     renderSlip();
+    renderGameLadder();
   }
   const fmtLine = (x) => (x > 0 ? "+" + x : x === 0 ? "PK" : String(x));
 
@@ -735,6 +791,8 @@
     const team = l.side === "home" ? gh : ga;
     if (l.type === "ml") return `${team} to win`;
     if (l.type === "spread") return `${team} ${fmtLine(l.line)}`;
+    if (l.type === "ttotal") return `${l.team === "home" ? gh : ga} team total ${l.side === "o" ? "over" : "under"} ${l.line}`;
+    if (l.type === "h1total") return `1st half ${l.side === "o" ? "over" : "under"} ${l.line}`;
     return `${l.side === "o" ? "Over" : "Under"} ${l.line} total points`;
   }
   function sgpForm() {
@@ -821,6 +879,68 @@
     } else if ($("sgpBook").value) ev = `<span class="dim">Enter American (+450, -120) or decimal (5.5) odds.</span>`;
     if (anyPush) ev += ` <span class="dim">Pushes count as not hitting; use half-point lines to avoid them.</span>`;
     $("sgpEv").innerHTML = ev;
+  }
+
+  // ---------------- alt-line ladders ----------------
+  const ladderOdds = {}; // `${scope}|${line}|o|u` -> book odds text
+  const ladderLegs = {}; // scope -> [[legO, legU], ...] for the add buttons
+  function ladderLines(sorted, mark) { // half-point lines around the median, covering roughly the middle 90%
+    const lo = quant(sorted, 0.05), hi = quant(sorted, 0.95), range = Math.max(1, hi - lo);
+    const step = range <= 12 ? 1 : range <= 24 ? 2 : range <= 36 ? 3 : range <= 60 ? 5 : 10; // whole steps keep every rung on a half point (no pushes)
+    const center = Math.floor(quant(sorted, 0.5)) + 0.5, out = new Set();
+    for (let k = -8; k <= 8; k++) {
+      const l = center + k * step;
+      if (l >= 0.5 && l >= lo - step && l <= hi + step) out.add(l);
+    }
+    if (mark != null && isFinite(mark)) out.add(mark);
+    return [...out].sort((a, b) => a - b);
+  }
+  /* rows: [{line, label, o, u, oLbl, uLbl, legO, legU, mine}] */
+  function ladderTable(tbl, scope, key, rows, oHead, uHead) {
+    ladderLegs[scope] = rows.map((r) => [r.legO, r.legU]);
+    const evCell = (p, side, r) => {
+      const v = ladderOdds[`${scope}|${r.line}|${side}`] || "", D = SGP.toDecimal(v);
+      const ev = D ? p * D - 1 : null;
+      return `<td><input data-s="${side}" data-l="${r.line}" type="text" value="${v}" placeholder="odds"></td>` +
+        `<td>${ev == null ? "" : `<span class="${ev > 0 ? "edge-hi" : "edge-lo"}">${ev >= 0 ? "+" : "−"}$${Math.abs(ev * 100).toFixed(0)}</span>`}</td>`;
+    };
+    tbl.innerHTML = `<tr><th>Line</th><th>${oHead}</th><th>Fair</th><th>Book</th><th>EV/$100</th><th>${uHead}</th><th>Fair</th><th>Book</th><th>EV/$100</th><th>Parlay</th></tr>` +
+      rows.map((r, i) => `<tr class="${r.mine ? "mine" : ""}"><td>${r.label}</td>
+        <td class="${r.o >= 0.56 ? "edge-hi" : ""}">${pct(r.o)}</td><td>${american(r.o)}</td>${evCell(r.o, "o", r)}
+        <td class="${r.u >= 0.56 ? "edge-lo" : ""}">${pct(r.u)}</td><td>${american(r.u)}</td>${evCell(r.u, "u", r)}
+        <td><button class="add" data-i="${i}" data-s="0">${r.oLbl}</button><button class="add" data-i="${i}" data-s="1">${r.uLbl}</button></td></tr>`).join("");
+    tbl.querySelectorAll("input").forEach((inp) => (inp.onchange = () => {
+      ladderOdds[`${scope}|${inp.dataset.l}|${inp.dataset.s}`] = inp.value.trim();
+      ladderTable(tbl, scope, key, rows, oHead, uHead);
+    }));
+    tbl.querySelectorAll("button.add").forEach((b) => (b.onclick = () => addLeg(key, ladderLegs[scope][+b.dataset.i][+b.dataset.s])));
+  }
+  function renderGameLadder() {
+    if (!projResult) return;
+    const r = projResult, A = cur.away, H = cur.home, key = sgpKey();
+    const opts = [["spread", `${H} spread`], ["total", "Game total"], ["ttA", `${A} team total`], ["ttH", `${H} team total`], ["h1", "1st half total"]];
+    const sel = $("ladMarket").value || "spread";
+    $("ladMarket").innerHTML = opts.map(([v, l]) => `<option value="${v}" ${v === sel ? "selected" : ""}>${l}</option>`).join("");
+    const sortA = (a) => Array.from(a).sort((x, y) => x - y);
+    const sp = num($("mSpread").value), tl = num($("mTotal").value);
+    let rows = [], oH = "Over", uH = "Under";
+    if (sel === "spread") {
+      const m = sortA(Array.from(r.home, (h, i) => h - r.away[i]));
+      oH = `${H} covers`; uH = `${A} covers`;
+      rows = ladderLines(m, sp != null ? -sp : null).map((ml) => {
+        const s = -ml; // home spread
+        return { line: s, label: `${H} ${fmtLine(s)} / ${A} ${fmtLine(-s)}`, o: pOver(m, ml), u: pUnder(m, ml), oLbl: H, uLbl: A, mine: sp != null && s === sp,
+          legO: { type: "spread", side: "home", line: s }, legU: { type: "spread", side: "away", line: -s } };
+      }).sort((a, b) => a.line - b.line);
+    } else {
+      const src = sel === "total" ? Array.from(r.home, (h, i) => h + r.away[i]) : sel === "ttA" ? r.away : sel === "ttH" ? r.home : Array.from(r.home1h, (h, i) => h + r.away1h[i]);
+      const t = sortA(src), mark = sel === "total" ? tl : null;
+      rows = ladderLines(t, mark).map((l) => {
+        const leg = (side) => sel === "total" ? { type: "total", side, line: l } : sel === "h1" ? { type: "h1total", side, line: l } : { type: "ttotal", team: sel === "ttA" ? "away" : "home", side, line: l };
+        return { line: l, label: String(l), o: pOver(t, l), u: pUnder(t, l), oLbl: "O", uLbl: "U", mine: mark != null && l === mark, legO: leg("o"), legU: leg("u") };
+      });
+    }
+    ladderTable($("ladGame"), `${key}|${sel}`, key, rows, oH, uH);
   }
 
   // ---------------- player card ----------------
@@ -912,11 +1032,18 @@
       <div class="cards">${cards.map(([a, b2, c]) => `<div class="card"><div class="k">${a}</div><div class="v">${b2}</div><div class="s">${c}</div></div>`).join("")}</div>
       <div class="charts2"><div><h4>Last ${bars.length} games · ${STAT_LBL[k]}</h4><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
         <div><h4>Model distribution tonight</h4>${sim ? `<svg id="pcHist" viewBox="0 0 600 200"></svg>` : `<p class="dim">Not simulated yet. Open the game on Projections or run the Slate.</p>`}</div></div>
+      ${sim ? `<h4 class="lad">Alt-line ladder · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· type a book's price on any rung for its EV; O / U adds that rung to the parlay</span></h4><div class="scrollx"><table class="props ladder" id="pcLadder"></table></div>` : ""}
       <div class="scrollx"><table class="log"><tr><th>Date</th><th>Opp</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>+/-</th>${COMBO[k] ? `<th>${k.toUpperCase()}</th>` : ""}</tr>${logRows || `<tr><td colspan="14" class="dim">No games in the data.</td></tr>`}</table></div>`;
     if (sim) {
       const d = sim.d[k], mean = meanOf(d), sd = Math.sqrt(meanOf(Array.from(d, (x) => (x - mean) ** 2)));
       const lo = Math.max(0, Math.floor(mean - 3 * sd)), hi = Math.ceil(mean + 3 * sd) + 1;
       hist($("pcHist"), Array.from(d), lo, hi, Math.max(1, Math.round((hi - lo) / 40)), line, Math.max(1, Math.round((hi - lo) / 8)), `line ${line}`);
+    }
+    if (sim) {
+      const d = sim.d[k], ck = card.key || sgpKey();
+      const rows = ladderLines(d, line).map((l) => ({ line: l, label: String(l), o: pOver(d, l), u: pUnder(d, l), oLbl: "O", uLbl: "U", mine: l === line,
+        legO: { type: "prop", id, stat: k, side: "o", line: l }, legU: { type: "prop", id, stat: k, side: "u", line: l } }));
+      ladderTable($("pcLadder"), `${id}|${k}`, ck, rows, "Over", "Under");
     }
     $("pcClose").onclick = closeCard;
     $("pcStat").onchange = () => { card.stat = $("pcStat").value; renderCard(); };

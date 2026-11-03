@@ -42,7 +42,7 @@
         <div class="trow" id="rowHome"><i class="bar"></i><span class="abbr"></span><span class="pts">0</span></div>
       </div>
       <div class="clockbox"><div id="qtr">1ST</div><div id="clock">12:00</div></div>
-      <div class="situation"><span id="restTag" class="restTag"></span><span id="run"></span><span id="lead">TIP-OFF</span><span id="poss"></span></div>
+      <div class="situation"><span id="wpTag"></span><span id="restTag" class="restTag"></span><span id="run"></span><span id="lead">TIP-OFF</span><span id="poss"></span></div>
     </div>
 
     <div class="fieldwrap">
@@ -59,6 +59,7 @@
       <div><div class="ptype mono" id="pType"></div><div class="pdesc" id="pDesc">Press play to start.</div></div>
     </div>
     <svg id="flow" viewBox="0 0 1000 70" preserveAspectRatio="none"></svg>
+    <svg id="wpChart" viewBox="0 0 1000 90" preserveAspectRatio="none"></svg>
 
     <div class="controls">
       <button id="btnPlay" class="primary">▶ Play</button>
@@ -137,6 +138,12 @@
         <div><h3 id="marginTitle">Home margin distribution</h3><svg id="marginChart" viewBox="0 0 600 200"></svg></div>
         <div><h3>Total points distribution</h3><svg id="totalChart" viewBox="0 0 600 200"></svg></div>
       </div>
+      <div class="propbar">
+        <h3>Alt lines</h3>
+        <label>Market <select id="ladMarket"></select></label>
+        <span class="dim">The model's chance at every line. Type a book's price on any rung for its EV; O / U adds that rung to the parlay.</span>
+      </div>
+      <div class="scrollx"><table class="props ladder" id="ladGame"></table></div>
       <div class="propbar">
         <h3>Player props</h3>
         <label>Stat <select id="statSel">

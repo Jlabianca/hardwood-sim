@@ -64,6 +64,7 @@ main { padding: 18px 22px; max-width: 1280px; margin: 0 auto; }
 .oncourt div.hd { color: var(--dim); font-size: 10px; }
 .oncourt div span:not(:first-child) { text-align: right; }
 .oncourt .act { color: var(--accent); }
+#wpChart { width: 100%; height: 90px; margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; display: block; }
 #flow { width: 100%; height: 70px; margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; display: block; }
 .marketrow { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: -4px 0 14px; font-size: 13px; }
 .marketrow input { width: 90px; }
@@ -182,6 +183,10 @@ table.log td.hl { font-weight: 700; } table.log td.ov { color: var(--good); } ta
 table.log tr.prev td { opacity: .55; } table.log tr.sep td { color: var(--dim); font-size: 11px; text-align: left; padding-top: 8px; }
 table.log tr.dnp td { color: var(--dim); }
 @media (max-width: 860px) { .mbox .charts2 { grid-template-columns: 1fr; } }
+table.ladder input { width: 70px; }
+table.ladder tr.mine td { background: #17202b; }
+table.ladder tr.mine td:first-child { color: var(--accent); }
+.mbox h4.lad { margin-top: 14px; }
 footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--line); margin-top: 20px; }
 
 @media (max-width: 860px) {
