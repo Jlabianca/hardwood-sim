@@ -59,6 +59,8 @@ Inactive players were taken from the real box score (they're known at tip-off), 
 
 The model's margins correlate 0.88 with the closing spreads, it picked 72% of winners, and its win-probability Brier score is 0.189. Player projections correlate 0.70 with actual points (error 4.64 vs. 4.83 for the player's season average), 0.65 with rebounds and 0.69 with assists, where it roughly matches season averages.
 
+**Stars get their full share of shots.** Shots used to be handed out in plain proportion to each player's usage, which spread them too evenly: players averaging 25+ were projected about 1.6 points short on the backtest (about 3 short early in 2026-27). Each player's shot weight is now his usage relative to league average raised to `use_gamma` (1.2), which brings the 25+ group to within about half a point on both seasons and slightly lowers points error (4.62 on the backtest).
+
 **Prop probabilities are calibrated.** Against a stand-in line (each player's season average, rounded to x.5), the model's lean probabilities were on average within 3.7 points (points), 1.9 (rebounds) and 2.6 (assists) of how often they actually hit, down from about 5 before the nightly-form variation was added (`var_use`, `var_eff`, `var_reb`, `var_ast` in the model: some nights a player shoots more, shoots better, or rebounds/passes more, relative to his teammates). **Bottom line: it's sensible and its percentages mean what they say, but it doesn't beat the closing line.** Treat a gap between the model and the market as a reason to dig in, not as a bet. To rerun the backtest:
 
 ```bash

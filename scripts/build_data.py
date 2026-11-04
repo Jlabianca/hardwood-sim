@@ -666,7 +666,10 @@ def main():
         "load_k": 0.35,       # efficiency bonus/penalty per log-unit of lineup shot creation vs league
         # nightly form (SD, log scale): shot volume, shooting (relative to teammates), rebounding, passing.
         # tuned on the 2025-26 backtest so prop probabilities match how often leans actually hit
-        "var_use": 0.25, "var_eff": 0.35, "var_reb": 0.7, "var_ast": 0.7,  # non-shooting fouls per possession (foul-outs only)
+        "var_use": 0.25, "var_eff": 0.35, "var_reb": 0.7, "var_ast": 0.7,
+        # stars keep more of their shots in crowded lineups (chance share ~ usage^1.2); fixes stars running
+        # ~1.6 pts low and role players high on the 2025-26 backtest
+        "use_gamma": 1.2,  # non-shooting fouls per possession (foul-outs only)
         "home_edge": 0.035,
         "home_margin": round(float(home_margin), 2),
         "rest": rest,

@@ -139,6 +139,7 @@
 
   function simulateGame(model, opts) {
     const basis = opts.basis || model.default_basis || "blend";
+    const G_USE = model.league.use_gamma || 1;
     // calibration constants can differ per basis
     const L = Object.assign({}, model.league, (model.league.calib || {})[basis] || {}), LR = leagueRates(model, basis);
     const rng = makeRng(opts.seed == null ? (Math.random() * 1e9) | 0 : opts.seed);
@@ -328,9 +329,12 @@
         chance++;
         const ev = log ? { side: o } : null;
         // who ends this chance, and how
-        const w = on[o].map((i) => { const p = tm[o].ps[i]; return (p.fga + p.trip + p.tov) * p.gu; });
+        // who ends this chance: high-usage players keep more of their share when the lineup is crowded
+        // with shot creators (G_USE > 1), as in real rotations
+        const useR = on[o].map((i) => { const p = tm[o].ps[i]; return p.fga + p.trip + p.tov; });
+        const w = useR.map((x, j) => Math.pow(x / LR.use, G_USE) * LR.use * tm[o].ps[on[o][j]].gu);
         // usage load: a lineup with less shot creation than usual has to stretch, and gets less efficient
-        let load = 0; for (const x of w) load += x;
+        let load = 0; for (const x of useR) load += x;
         load = load / (5 * LR.use);
         const loadAdj = clamp(L.load_k * Math.log(load), -0.12, 0.08);
         const actor = on[o][rng.pick(w)];

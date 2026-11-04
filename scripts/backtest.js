@@ -3,13 +3,15 @@
 // Players who didn't play in the real game are treated as out (inactives are known at tip-off).
 // Usage: node scripts/backtest.js 2026 2026-02-02 2026-02-09 ...   (dates = as-of model dates)
 const fs = require("fs");
-const Sim = require("../site/js/sim.js");
+const Sim = require(process.env.SIM ? require("path").resolve(process.env.SIM) : "../site/js/sim.js");
 const [season, ...dates] = process.argv.slice(2);
 const DIR = process.env.BT_DIR || "backtest";
 const actual = JSON.parse(fs.readFileSync(process.env.ACTUALS || `backtest/actuals_${season}.json`));
 const N = +(process.env.N || 1000);
 const rows = [], props = { pts: [], reb: [], ast: [], fg3m: [] }, base = { pts: [], reb: [], ast: [] };
-const leans = { pts: [], reb: [], ast: [] }; // [model P(over), hit] against the season-average stand-in line
+const leans = { pts: [], reb: [], ast: [] };
+const mtiers = {};
+const tiers = { "avg 25+": [], "avg 18-25": [], "avg 10-18": [], "avg <10": [] }; // model minus actual points, by season average // [model P(over), hit] against the season-average stand-in line
 const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
 const NOREST = process.env.NOREST === "1";
 function restCat(model, team, date) {
@@ -28,6 +30,8 @@ for (let k = 0; k < dates.length; k++) {
   if (process.env.VAR_EFF) model.league.var_eff = +process.env.VAR_EFF;
   if (process.env.VAR_REB) model.league.var_reb = +process.env.VAR_REB;
   if (process.env.VAR_AST) model.league.var_ast = +process.env.VAR_AST;
+  if (process.env.USE_GAMMA) model.league.use_gamma = +process.env.USE_GAMMA;
+  if (process.env.MIN_BOOST) model.league.min_boost = +process.env.MIN_BOOST;
   const games = actual.filter((g) => g.date >= d0 && g.date < d1 && model.teams[g.home] && model.teams[g.away]);
   for (const g of games) {
     const ids = [...model.teams[g.home].players, ...model.teams[g.away].players].map((p) => p.id);
@@ -46,6 +50,11 @@ for (let k = 0; k < dates.length; k++) {
       for (const st in props) props[st].push([mean(Array.from(s[st])), a[st]]);
       const av = avgOf[id];
       if (av && av.pts != null) for (const st in base) base[st].push([av[st], a[st], mean(Array.from(s[st]))]);
+      if (av && av.pts != null) {
+        const t = av.pts >= 25 ? "avg 25+" : av.pts >= 18 ? "avg 18-25" : av.pts >= 10 ? "avg 10-18" : "avg <10";
+        tiers[t].push(mean(Array.from(s.pts)) - a.pts);
+        (mtiers[t] = mtiers[t] || []).push(mean(Array.from(s.min)) - a.min);
+      }
       if (av && av.pts != null) for (const st in leans) {
         const line = Math.floor(av[st]) + 0.5, arr = s[st];
         let o = 0; for (let i = 0; i < arr.length; i++) if (arr[i] > line) o++;
@@ -85,5 +94,7 @@ for (const st in leans) {
   }
   console.log(`leans ${st.padEnd(4)} calibration error ${(ece * 100).toFixed(2)} | ${out.join(" | ")}`);
 }
+console.log("minutes bias by season average (model - actual): " + Object.entries(mtiers).map(([k, v]) => `${k} ${mean(v).toFixed(2)}`).join(" | "));
+console.log("points bias by season average (model - actual): " + Object.entries(tiers).map(([k, v]) => `${k} ${v.length ? mean(v).toFixed(2) : "-"} (n=${v.length})`).join(" | "));
 for (const st in base) console.log(`season-avg baseline ${st.padEnd(4)} n=${base[st].length} corr ${corr(base[st]).toFixed(2)} MAE ${mae(base[st].map((p) => p[0] - p[1])).toFixed(2)} | model on same players corr ${corr(base[st].map((p) => [p[2], p[1]])).toFixed(2)} MAE ${mae(base[st].map((p) => p[2] - p[1])).toFixed(2)}`);
 for (const st in props) console.log(`player ${st.padEnd(5)} n=${props[st].length} corr ${corr(props[st]).toFixed(2)} MAE ${mae(props[st].map((p) => p[0] - p[1])).toFixed(2)}`);
