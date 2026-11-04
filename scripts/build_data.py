@@ -69,6 +69,8 @@ def download(raw, season, refresh, asof):
     for y in (season, season - 1):
         jobs += [(n.format(y=y), u.format(y=y)) for n, u in FILES.items()]
     jobs += [(n.format(y=season), u.format(y=season)) for n, u in CUR_ONLY.items()]
+    # two seasons back: box scores only, for head-to-head history (past meetings, player vs. team)
+    jobs += [(n.format(y=season - 2), u.format(y=season - 2)) for n, u in FILES.items() if n.startswith(("player_box", "team_box"))]
     jobs.append(LINES)
     for name, url in jobs:
         path = os.path.join(raw, name)
@@ -201,8 +203,57 @@ def defense_vs_position(pb, season, teams):
 LOG_COLS = ["min", "pts", "oreb", "dreb", "ast", "fg3m", "stl", "blk", "tov", "fgm", "fga", "fg3a", "ftm", "fta"]
 
 
-def write_logs(pb, season, teams, path):
-    """Per player: every current-season game (DNPs included, with the reason) and every game of last season.
+def h2h_games(raw, pb_all, seasons, asof, lines):
+    """Every completed meeting in these seasons: [date, season, away, home, away_pts, home_pts, home_spread, total, away_top, home_top]."""
+    frames = []
+    for y in seasons:
+        tb = read(raw, f"team_box_{y}.parquet")
+        if tb is None:
+            continue
+        tb = tb[tb["season_type"] == 2].copy()
+        tb["yr"] = y
+        frames.append(tb)
+    if not frames:
+        return []
+    tb = pd.concat(frames, ignore_index=True)
+    tb["game_date"] = tb["game_date"].astype(str)
+    tb = tb[tb["game_date"] < asof]
+    tb["team_score"] = pd.to_numeric(tb["team_score"], errors="coerce")
+    top = {}
+    pl = pb_all[pb_all["played"]]
+    for (gid, t), g in pl.groupby(["game_id", "team_abbreviation"]):
+        r = g.loc[g["pts"].idxmax()]
+        top[(str(gid), t)] = f'{short_name(r["athlete_display_name"])} {int(r["pts"])}'
+    out = []
+    for gid, g in tb.groupby("game_id"):
+        h = g[g["team_home_away"] == "home"]
+        a = g[g["team_home_away"] == "away"]
+        if h.empty or a.empty or not (h["team_score"].iloc[0] > 0):
+            continue
+        hp, ou = lines.get(str(gid), (None, None))
+        H, A = h["team_abbreviation"].iloc[0], a["team_abbreviation"].iloc[0]
+        out.append([h["game_date"].iloc[0], int(h["yr"].iloc[0]), A, H, int(a["team_score"].iloc[0]), int(h["team_score"].iloc[0]),
+                    None if hp is None or pd.isna(hp) else float(hp), None if ou is None or pd.isna(ou) else float(ou),
+                    top.get((str(gid), A), ""), top.get((str(gid), H), "")])
+    return sorted(out)
+
+
+def prep_box(pbx, y, asof):
+    """Minimal clean-up of an older season's player box scores (for logs / head-to-head only)."""
+    pbx = pbx[pbx["season_type"] == 2].copy()
+    pbx["yr"] = y
+    pbx["game_date"] = pbx["game_date"].astype(str)
+    pbx = pbx[pbx["game_date"] < asof].rename(columns=BOX_COLS)
+    for c in STATS:
+        pbx[c] = pd.to_numeric(pbx[c], errors="coerce").fillna(0)
+    pbx["athlete_id"] = idstr(pbx["athlete_id"])
+    pbx["team_id"] = idstr(pbx["team_id"])
+    pbx["played"] = pbx["min"] > 0
+    return pbx
+
+
+def write_logs(pb, season, teams, path, games=None):
+    """Per player: every current-season game (DNPs included, with the reason) and every game of the two seasons before.
     Row: [date, opp, home(1/0), season, min, pts, reb, ast, 3pm, stl, blk, tov, fgm, fga, 3pa, ftm, fta, +/-, start(1/0), dnp_reason, team].
     Also, per team: for each game, who played (for with/without teammate splits)."""
     ids = {p["id"] for t in teams.values() for p in t["players"]}
@@ -213,7 +264,7 @@ def write_logs(pb, season, teams, path):
     out = {}
     for pid, g in d.groupby("athlete_id"):
         cur_ = g[g["yr"] == season]
-        prev = g[(g["yr"] == season - 1) & g["played"]]
+        prev = g[(g["yr"] < season) & g["played"]]
         rows = []
         for _, r in pd.concat([prev, cur_]).iterrows():
             played = bool(r["played"])
@@ -226,13 +277,13 @@ def write_logs(pb, season, teams, path):
         out[pid] = rows
     # team game rosters: team -> {date: [ids who played]}, both seasons
     tg = {}
-    pl = pb[pb["played"]]
+    pl = pb[pb["played"] & (pb["yr"] >= season - 1)]
     for (t, gd), g in pl.groupby(["team_abbreviation", "game_date"]):
         tg.setdefault(t, {})[gd] = sorted(g["athlete_id"].tolist())
-    out = {"players": out, "teams": tg}
+    out = {"players": out, "teams": tg, "games": games or []}
     with open(path, "w") as fh:
         json.dump(out, fh, separators=(",", ":"))
-    print(f"wrote {path}: game logs for {len(out['players'])} players, {len(tg)} teams")
+    print(f"wrote {path}: game logs for {len(out['players'])} players, {len(tg)} teams, {len(out['games'])} past games")
 
 
 def main():
@@ -681,7 +732,10 @@ def main():
     dvp = defense_vs_position(pb, season, teams)
 
     # ---------------- game logs (for the player cards; loaded by the page only when a card opens) ----------------
-    write_logs(pb, season, teams, os.path.join(os.path.dirname(a.out) or ".", "logs.json"))
+    old = read(a.raw, f"player_box_{season - 2}.parquet")
+    pb_all = pd.concat([prep_box(old, season - 2, asof), pb], ignore_index=True) if old is not None else pb
+    meetings = h2h_games(a.raw, pb_all, (season - 2, season - 1, season), asof, line_by_game)
+    write_logs(pb_all, season, teams, os.path.join(os.path.dirname(a.out) or ".", "logs.json"), meetings)
 
     model = {
         "season": season, "season_label": f"{season - 1}-{str(season)[2:]}",

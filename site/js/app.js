@@ -697,6 +697,7 @@
     renderSgp();
     renderSlip();
     renderGameLadder();
+    renderH2H();
   }
   const fmtLine = (x) => (x > 0 ? "+" + x : x === 0 ? "PK" : String(x));
 
@@ -978,7 +979,7 @@
     return null;
   }
   function openPlayer(id, stat, key) {
-    card = { id, stat: CARD_STATS.includes(stat) ? stat : "pts", key: key || null };
+    card = { id, stat: CARD_STATS.includes(stat) ? stat : "pts", key: key || null, vs: null };
     $("pcard").classList.remove("hidden");
     $("pcardBox").innerHTML = `<p class="dim">Loading game logs…</p>`;
     loadLogs().then(renderCard);
@@ -1062,6 +1063,7 @@
         <div><h4>Model distribution tonight</h4>${sim ? `<svg id="pcHist" viewBox="0 0 600 200"></svg>` : `<p class="dim">Not simulated yet. Open the game on Projections or run the Slate.</p>`}</div></div>
       ${sim ? `<h4 class="lad adv">Alt-line ladder · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· type a book's price on any rung for its EV; O / U adds that rung to the parlay</span></h4><div class="scrollx adv"><table class="props ladder" id="pcLadder"></table></div>` : ""}
       ${matchupLine(P, opp, k)}
+      ${vsTeamHtml(id, k, line, rows, team, opp)}
       ${wowyHtml(id, P, k, line, rows)}
       <div class="scrollx"><table class="log"><tr><th>Date</th><th>Opp</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>+/-</th>${COMBO[k] ? `<th>${k.toUpperCase()}</th>` : ""}</tr>${logRows || `<tr><td colspan="14" class="dim">No games in the data.</td></tr>`}</table></div>`;
     if (sim) {
@@ -1077,6 +1079,7 @@
     }
     $("pcClose").onclick = closeCard;
     $("pcFav").onclick = () => { toggleFav(id); renderCard(); };
+    if ($("pcVs")) $("pcVs").onchange = () => { card.vs = $("pcVs").value; renderCard(); };
     $("pcStat").onchange = () => { card.stat = $("pcStat").value; renderCard(); };
     $("pcLine").onchange = () => {
       if ($("pcLine").value === "") delete lines[key]; else lines[key] = +$("pcLine").value;
@@ -1125,7 +1128,7 @@
       }
       return windowOf[key];
     };
-    const mine = rows.filter((r) => !r[19] && r[20] === team);
+    const mine = rows.filter((r) => !r[19] && r[20] === team && r[3] >= model.season - 1); // rosters are kept for two seasons
     const out = [];
     for (const X of mates.slice(0, 12)) {
       const wi = [], wo = [];
@@ -1218,6 +1221,83 @@
     };
     if (tracker) return go(tracker);
     fetch("data/tracker.json").then((r) => (r.ok ? r.json() : null)).then(go).catch(() => go(null));
+  }
+
+  // ---------------- head to head ----------------
+  function meetings(A, H) { // past games between these two teams, newest first
+    if (!logs || !logs.games) return [];
+    return logs.games.filter((g) => (g[2] === A && g[3] === H) || (g[2] === H && g[3] === A)).slice().reverse();
+  }
+  const seasonLbl = (y) => `${y - 1}-${String(y).slice(2)}`;
+  function seriesLine(A, H, ms) {
+    const w = { [A]: 0, [H]: 0 };
+    for (const g of ms) w[g[5] > g[4] ? g[3] : g[2]]++;
+    return w;
+  }
+  function renderH2H() {
+    if (!$("h2hBox")) return;
+    if (!logs) { loadLogs().then(renderH2H); $("h2hBox").innerHTML = ""; return; }
+    const A = cur.away, H = cur.home, ms = meetings(A, H);
+    const TA = model.teams[A], TH = model.teams[H];
+    if (!ms.length) { $("h2hBox").innerHTML = `<h3 class="sec">Head to head</h3><p class="dim">No meetings between ${TA.short} and ${TH.short} in the last three seasons.</p>`; return; }
+    const thisSeason = ms.filter((g) => g[1] === model.season);
+    const W = seriesLine(A, H, ms), Ws = seriesLine(A, H, thisSeason);
+    const ptsFor = (t, g) => (g[3] === t ? g[5] : g[4]);
+    const avgA = meanOf(ms.map((g) => ptsFor(A, g))), avgH = meanOf(ms.map((g) => ptsFor(H, g)));
+    const tots = ms.map((g) => g[4] + g[5]);
+    const withTot = ms.filter((g) => g[7] != null), overs = withTot.filter((g) => g[4] + g[5] > g[7]).length;
+    const withSp = ms.filter((g) => g[6] != null);
+    const covers = { [A]: 0, [H]: 0 }; let pushes = 0;
+    for (const g of withSp) { const m = g[5] - g[4] + g[6]; if (m === 0) pushes++; else covers[m > 0 ? g[3] : g[2]]++; }
+    const lead = W[A] === W[H] ? `The series is tied ${W[A]}–${W[H]}` : `${W[A] > W[H] ? TA.short : TH.short} lead the series ${Math.max(W[A], W[H])}–${Math.min(W[A], W[H])}`;
+    const sum = `${lead} over the last three seasons${thisSeason.length ? ` (${Ws[A]}–${Ws[H]} ${A}–${H} this season)` : ""}. On average: ${A} ${avgA.toFixed(1)}, ${H} ${avgH.toFixed(1)}, total ${meanOf(tots).toFixed(1)}.` +
+      (withTot.length ? ` They went over the closing total in ${overs} of ${withTot.length}.` : "");
+    const advSum = withSp.length ? ` Against the spread: ${A} ${covers[A]}–${covers[H]}${pushes ? `–${pushes}` : ""}.` : "";
+    const rows = ms.map((g) => {
+      const [d, y, a, h, as, hs, hp, tot, at, ht] = g, win = hs > as ? h : a, mg = Math.abs(hs - as);
+      const ats = hp == null ? "" : (() => { const m = hs - as + hp; return m === 0 ? "push" : `${m > 0 ? h : a} covered (${h} ${fmtLine(hp)})`; })();
+      const ou = tot == null ? "" : `${as + hs > tot ? "Over" : as + hs < tot ? "Under" : "Push"} ${tot}`;
+      return `<tr><td>${fmtDate(d)}</td><td class="dim">${seasonLbl(y)}</td><td>${a} @ ${h}</td>
+        <td>${win === a ? `<b>${a} ${as}</b>, ${h} ${hs}` : `${a} ${as}, <b>${h} ${hs}</b>`}</td><td>${win} by ${mg}</td><td>${as + hs}</td>
+        <td class="dim">${at}${at && ht ? " · " : ""}${ht}</td><td class="adv">${ats}</td><td class="adv">${ou}</td></tr>`;
+    }).join("");
+    $("h2hBox").innerHTML = `<h3 class="sec">Head to head <span class="dim">· every meeting in the last three seasons, newest first · rosters change, so older games say less about tonight</span></h3>
+      <p class="sum">${sum}<span class="adv">${advSum}</span></p>
+      <div class="scrollx"><table class="props"><tr><th>Date</th><th>Season</th><th>Game</th><th>Score</th><th>Margin</th><th>Total</th><th>Top scorers</th><th class="adv">Spread</th><th class="adv">Over / under</th></tr>${rows}</table></div>`;
+  }
+  function lastMeetingLine(A, H) {
+    const ms = meetings(A, H);
+    if (!ms.length) return "";
+    const g = ms[0], W = seriesLine(A, H, ms);
+    const win = g[5] > g[4] ? [g[3], g[5], g[2], g[4]] : [g[2], g[4], g[3], g[5]];
+    return `<div class="last">Last meeting ${fmtDate(g[0])}${g[1] !== model.season ? ` (${seasonLbl(g[1])})` : ""}: <b>${win[0]} ${win[1]}</b>–${win[2]} ${win[3]} · last 3 seasons: ${A} ${W[A]}–${W[H]} ${H}</div>`;
+  }
+  function vsTeamHtml(id, k, line, rows, team, opp) {
+    const teams = Object.keys(model.teams).filter((t) => t !== team).sort();
+    const sel = card.vs || opp || teams[0];
+    const g = rows.filter((r) => !r[19] && r[1] === sel);
+    const seasons = new Set(g.map((r) => r[3]));
+    const norm = rows.filter((r) => !r[19] && seasons.has(r[3]) && r[1] !== sel);
+    const avg = (rs) => (rs.length ? meanOf(rs.map((r) => logVal(r, k))) : null);
+    const av = avg(g), an = avg(norm), diff = av != null && an != null ? av - an : null;
+    const over = g.filter((r) => logVal(r, k) > line).length;
+    const opts = teams.map((t) => `<option ${t === sel ? "selected" : ""}>${t}</option>`).join("");
+    let body;
+    if (!g.length) body = `<p class="dim">No games against ${sel} in the last three seasons.</p>`;
+    else {
+      const sum = `${g.length} game${g.length > 1 ? "s" : ""} vs ${sel}: <b>${av.toFixed(1)} ${STAT_LBL[k]}</b>` +
+        (diff != null ? ` — ${Math.abs(diff) < 0.5 ? "about his usual" : `<span class="${diff > 0 ? "edge-hi" : "edge-lo"}">${diff > 0 ? "+" : ""}${diff.toFixed(1)} vs. his average</span>`} in those seasons (${an.toFixed(1)})` : "") +
+        ` · over ${line} in <b>${over} of ${g.length}</b> · ${meanOf(g.map((r) => r[4])).toFixed(0)} min a game.` +
+        (g.length < 4 ? ` <span class="dim">Small sample — a hint, not a number.</span>` : "");
+      const tr = g.slice().reverse().map((r) => {
+        const v = logVal(r, k), cls = v > line ? "ov" : v < line ? "un" : "";
+        return `<tr><td>${fmtDate(r[0])}</td><td class="dim">${seasonLbl(r[3])}${r[20] !== team ? ` · ${r[20]}` : ""}</td><td>${r[2] ? "vs" : "@"} ${r[1]}</td><td>${r[4]}</td>
+          <td class="${k === "pts" ? "hl " + cls : ""}">${r[5]}</td><td class="${k === "reb" ? "hl " + cls : ""}">${r[6]}</td><td class="${k === "ast" ? "hl " + cls : ""}">${r[7]}</td><td class="${k === "fg3m" ? "hl " + cls : ""}">${r[8]}</td>
+          <td>${r[12]}-${r[13]}</td><td>${r[17] > 0 ? "+" : ""}${r[17]}</td>${COMBO[k] ? `<td class="hl ${cls}">${v}</td>` : ""}</tr>`;
+      }).join("");
+      body = `<p class="sum">${sum}</p><div class="scrollx"><table class="log"><tr><th>Date</th><th>Season</th><th>Opp</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>FG</th><th>+/-</th>${COMBO[k] ? `<th>${k.toUpperCase()}</th>` : ""}</tr>${tr}</table></div>`;
+    }
+    return `<div class="vsteam"><h4 class="lad">Vs. <select id="pcVs">${opts}</select> ${sel === opp ? '<span class="dim" style="text-transform:none;letter-spacing:0">· tonight\'s opponent</span>' : ""} <span class="dim" style="text-transform:none;letter-spacing:0">· last three seasons (games for other teams marked)</span></h4>${body}</div>`;
   }
 
   // ---------------- multi-game parlay slip ----------------
@@ -1348,7 +1428,7 @@
   }
   function wowyFor(id, team, k, mates) { // [{X, wo: games without, diff: avg without - avg with}]
     if (!logs || !logs.teams) return [];
-    const rows = ((logs.players && logs.players[id]) || []).filter((r) => !r[19] && r[20] === team);
+    const rows = ((logs.players && logs.players[id]) || []).filter((r) => !r[19] && r[20] === team && r[3] >= model.season - 1);
     const out = [];
     for (const X of mates) {
       const xr = (logs.players[X.id] || []);
@@ -1530,6 +1610,7 @@
         <div class="bar"><i style="width:${(pA * 100).toFixed(1)}%;background:${col(A)}"></i><i style="width:${(pH * 100).toFixed(1)}%;background:${col(H)}"></i></div>
         ${flags.length ? `<div class="flags">⚠ ${flags.join(" · ")}</div>` : ""}
         <ul><li><b>${A}</b>: ${keyLines(A)}</li><li><b>${H}</b>: ${keyLines(H)}</li></ul>
+        ${lastMeetingLine(A, H)}
         ${oA.length || oH.length ? `<div class="out">Out: ${[oA.length ? `${oA.join(", ")} (${A})` : "", oH.length ? `${oH.join(", ")} (${H})` : ""].filter(Boolean).join(" · ")}</div>` : ""}
         <div class="acts"><button data-open="${i}">Props &amp; details</button><button data-watch="${g.id}">Watch it</button></div></div>`;
     }).join("") || `<p class="dim">No games on this date.</p>`;
