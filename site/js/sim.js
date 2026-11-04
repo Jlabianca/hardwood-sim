@@ -85,12 +85,18 @@
     return t;
   }
 
-  function prepTeam(model, abbr, outSet, fixed) {
-    const T = model.teams[abbr], L = model.league;
-    let avail = T.players.filter((p) => !outSet.has(p.id));
+  /* basis "season": this season's ratings only (players with no games yet keep the blended ratings);
+     basis "blend": this season blended with last season */
+  const viewP = (p, basis) => (basis === "season" && p.s ? Object.assign({}, p, p.s) : p);
+  const viewT = (T, basis) => (basis === "season" && T.s ? Object.assign({}, T, T.s) : T);
+
+  function prepTeam(model, abbr, outSet, fixed, basis) {
+    const T = viewT(model.teams[abbr], basis), L = model.league;
+    const all = model.teams[abbr].players.map((p) => viewP(p, basis));
+    let avail = all.filter((p) => !outSet.has(p.id));
     if (avail.length < 5) { // never fewer than five: bring back the highest-minute players marked out
-      const back = T.players.filter((p) => outSet.has(p.id)).sort((a, b) => b.min - a.min).slice(0, 5 - avail.length);
-      avail = T.players.filter((p) => !outSet.has(p.id) || back.includes(p));
+      const back = all.filter((p) => outSet.has(p.id)).sort((a, b) => b.min - a.min).slice(0, 5 - avail.length);
+      avail = all.filter((p) => !outSet.has(p.id) || back.includes(p));
     }
     const targets = minuteTargets(avail, fixed);
     const ps = avail.map((p, i) => {
@@ -114,15 +120,17 @@
   }
 
   // league-average per-minute rates (for lineup strength ratios)
-  function leagueRates(model) {
-    if (model._lr) return model._lr;
+  function leagueRates(model, basis) {
+    model._lr = model._lr || {};
+    if (model._lr[basis]) return model._lr[basis];
     let m = 0; const s = { oreb: 0, dreb: 0, ast: 0, stl: 0, blk: 0, use: 0 };
-    for (const t in model.teams) for (const p of model.teams[t].players) {
+    for (const t in model.teams) for (const p0 of model.teams[t].players) {
+      const p = viewP(p0, basis);
       const w = Math.max(0, p.min);
       m += w; for (const k in s) s[k] += (k === "use" ? p.r.fga + (p.r.fta * 0.88) / 2.1 + p.r.tov : p.r[k]) * w;
     }
     for (const k in s) s[k] /= m;
-    model._lr = s;
+    model._lr[basis] = s;
     return s;
   }
 
@@ -130,10 +138,12 @@
   const STAT_KEYS = ["sec", "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "ast", "stl", "blk", "tov", "pf", "pm"];
 
   function simulateGame(model, opts) {
-    const L = model.league, LR = leagueRates(model);
+    const basis = opts.basis || model.default_basis || "blend";
+    // calibration constants can differ per basis
+    const L = Object.assign({}, model.league, (model.league.calib || {})[basis] || {}), LR = leagueRates(model, basis);
     const rng = makeRng(opts.seed == null ? (Math.random() * 1e9) | 0 : opts.seed);
     const outSet = new Set(opts.out || defaultOut(model, [opts.away, opts.home]));
-    const tm = [prepTeam(model, opts.away, outSet, opts.minutes), prepTeam(model, opts.home, outSet, opts.minutes)];
+    const tm = [prepTeam(model, opts.away, outSet, opts.minutes, basis), prepTeam(model, opts.home, outSet, opts.minutes, basis)];
     const log = !!opts.log;
     const neutral = !!opts.neutral;
 

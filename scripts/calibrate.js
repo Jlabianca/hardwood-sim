@@ -6,6 +6,7 @@ const Sim = require("../site/js/sim.js");
 const path = process.argv[2] || "site/data/model.json";
 const model = JSON.parse(fs.readFileSync(path));
 const teams = Object.keys(model.teams);
+let BASIS = "blend";
 function run() {
   delete model._lr;
   let pts = 0, poss = 0, k = 0, homeMargin = 0, reb = 0;
@@ -14,7 +15,7 @@ function run() {
     let a = teams[j % teams.length], h = teams[(j * 7 + 3) % teams.length];
     if (a === h) continue;
     if (i & 1) [a, h] = [h, a];
-    const r = Sim.simulateGame(model, { away: a, home: h, seed: 1000 + i });
+    const r = Sim.simulateGame(model, { away: a, home: h, seed: 1000 + i, basis: BASIS });
     const mins = 48 + 5 * r.ot;
     pts += (r.score.away + r.score.home) * 48 / mins; poss += (r.poss[0] + r.poss[1]) * 48 / mins; k += 2;
     homeMargin += r.score.home - r.score.away;
@@ -22,7 +23,15 @@ function run() {
   }
   return { pts: pts / k, poss: poss / k, hm: homeMargin / (k / 2), reb: reb / k };
 }
-const L = model.league, tPts = L.pts_per_team, tPoss = L.poss_per_team;
+const L0 = model.league, tPts = L0.pts_per_team, tPoss = L0.poss_per_team;
+L0.calib = L0.calib || {};
+const KEYS = ["eff_scale", "pace_scale", "reb_credit", "home_edge"];
+for (const basis of ["blend", "season"]) {
+BASIS = basis;
+const L = Object.assign({}, L0, L0.calib[basis] || {});
+delete L.calib; // while tuning, the simulator must read these working values, not stored ones
+model.league = L; // run() reads model.league through the simulator
+console.log(`-- basis: ${basis}`);
 for (let it = 0; it < 10; it++) {
   const r = run();
   console.log(`eff ${L.eff_scale.toFixed(3)} pace ${L.pace_scale.toFixed(3)} home ${L.home_edge.toFixed(3)} -> ${r.pts.toFixed(2)} pts/team (target ${tPts.toFixed(2)}), ${r.poss.toFixed(2)} poss/team (target ${tPoss.toFixed(2)}), home margin ${r.hm.toFixed(2)}, ${r.reb.toFixed(2)} reb/team (target ${L.reb_per_team})`);
@@ -33,5 +42,10 @@ for (let it = 0; it < 10; it++) {
   const ppp = r.pts / r.poss, tppp = tPts / tPoss;
   L.eff_scale += (tppp - ppp) / 0.45;
 }
+L0.calib[basis] = Object.fromEntries(KEYS.map((k) => [k, L[k]]));
+model.league = L0;
+}
+// top-level constants = the default basis (older pages read these)
+Object.assign(L0, L0.calib[model.default_basis || "blend"]);
 delete model._lr;
 fs.writeFileSync(path, JSON.stringify(model));

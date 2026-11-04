@@ -360,18 +360,22 @@ def main():
         "corner_share3": float(st[st["zone"] == "three"]["corner"].mean()),
         "dunk_rate": float(st[st["zone"] == "rim"]["dunk"].mean()),
     }
-    zagg = {}
-    for pid, d in st.groupby("athlete_id"):
-        w = d["w"]
-        two = d["zone"] != "three"
-        rim = d["zone"] == "rim"
-        zagg[pid] = {
-            "w2": float(w[two].sum()), "wrim": float(w[rim].sum()),
-            "wrim_m": float(w[rim & d["made"]].sum()), "wmid": float(w[d["zone"] == "mid"].sum()),
-            "wmid_m": float(w[(d["zone"] == "mid") & d["made"]].sum()),
-            "w3": float(w[~two].sum()), "wcorner": float(w[(~two) & d["corner"]].sum()),
-            "wdunk": float(w[rim & d["dunk"]].sum()),
-        }
+    def zone_agg(stw):
+        out = {}
+        for pid, d in stw.groupby("athlete_id"):
+            w = d["w"]
+            two = d["zone"] != "three"
+            rim = d["zone"] == "rim"
+            out[pid] = {
+                "w2": float(w[two].sum()), "wrim": float(w[rim].sum()),
+                "wrim_m": float(w[rim & d["made"]].sum()), "wmid": float(w[d["zone"] == "mid"].sum()),
+                "wmid_m": float(w[(d["zone"] == "mid") & d["made"]].sum()),
+                "w3": float(w[~two].sum()), "wcorner": float(w[(~two) & d["corner"]].sum()),
+                "wdunk": float(w[rim & d["dunk"]].sum()),
+            }
+        return out
+    zagg = zone_agg(st)
+    zagg_cur = zone_agg(st[st["yr"] == season])  # "this season only" ratings
 
     # ---------------- rosters & team mapping ----------------
     tb_frames = []
@@ -443,6 +447,7 @@ def main():
         k = np.arange(len(mc))[::-1]
         wm = 0.5 ** (k / MIN_HALF_LIFE)
         pm = dp[dp["played"]].tail(25)["min"]
+        mins_cur = float((mc["min"].values * wm).sum() / wm.sum()) if len(mc) else None
         if len(mc):
             num, den = float((mc["min"].values * wm).sum()), float(wm.sum())
             if len(pm):
@@ -459,47 +464,55 @@ def main():
         dpl = d[d["played"]]
         kc = np.arange((dpl["yr"] == season).sum())[::-1]
         kp = np.arange((dpl["yr"] == season - 1).sum())[::-1]
-        # early season: last season fades out of the *volume* rates (shots, trips, assists, boards) as current
-        # games come in, since roles change; shooting percentages keep more of last season (a hot week is mostly noise)
+        dpl = pd.concat([dpl[dpl["yr"] == season - 1], dpl[dpl["yr"] == season]])
         nc = len(kc)
+        pr = pos_rates.get(pos, pos_rates["F"])
+
+        def ratings(vol_pw, eff_pw, zsrc):
+            """Per-minute rates, shooting % and shot profile with the given weight on last season's games."""
+            cur_w = 0.5 ** (kc / RATE_HALF_LIFE)
+            w = np.concatenate([vol_pw * 0.5 ** (kp / 40.0), cur_w])
+            w_eff = np.concatenate([eff_pw * 0.5 ** (kp / 40.0), cur_w])
+            wmin = float((dpl["min"].values * w).sum())
+            rate = {}
+            for c in STATS:
+                if c in ("min", "pts"):
+                    continue
+                tot = float((dpl[c].values * w).sum())
+                rate[c] = (tot + pr[c] * RATE_SHRINK_MIN) / (wmin + RATE_SHRINK_MIN)
+            def wsum(c):
+                return float((dpl[c].values * w_eff).sum())
+            fg3a, fg3m, fta, ftm = wsum("fg3a"), wsum("fg3m"), wsum("fta"), wsum("ftm")
+            fg2a, fg2m = wsum("fga") - fg3a, wsum("fgm") - fg3m
+            lg3 = league_zone["three_pct"]
+            p3 = (fg3m + lg3 * 60) / (fg3a + 60)
+            ft = (ftm + 0.78 * 40) / (fta + 40)
+            z = zsrc.get(pid)
+            lr = league_zone
+            if z and z["w2"] > 0:
+                rim_share = (z["wrim"] + lr["rim_share2"] * 30) / (z["w2"] + 30)
+                rim_pct = (z["wrim_m"] + lr["rim_pct"] * 25) / (z["wrim"] + 25)
+                mid_pct = (z["wmid_m"] + lr["mid_pct"] * 30) / (z["wmid"] + 30)
+                corner = (z["wcorner"] + lr["corner_share3"] * 20) / (z["w3"] + 20)
+                dunk = (z["wdunk"] + lr["dunk_rate"] * 10) / (z["wrim"] + 10)
+            else:
+                rim_share, rim_pct, mid_pct, corner, dunk = lr["rim_share2"], lr["rim_pct"], lr["mid_pct"], lr["corner_share3"], lr["dunk_rate"]
+            # make the zone split consistent with the player's overall 2P% (box scores are complete; shot logs can miss a few)
+            p2 = (fg2m + 0.53 * 50) / (fg2a + 50)
+            zone_p2 = rim_share * rim_pct + (1 - rim_share) * mid_pct
+            if zone_p2 > 0:
+                adj = p2 / zone_p2
+                rim_pct, mid_pct = min(0.9, rim_pct * adj), min(0.75, mid_pct * adj)
+            return {"r": {k2: round(v, 5) for k2, v in rate.items()}, "p3": round(p3, 4), "ft": round(ft, 4), "rim": round(rim_share, 4),
+                    "prim": round(rim_pct, 4), "pmid": round(mid_pct, 4), "corner": round(corner, 3), "dunk": round(dunk, 3)}
+
+        # blended: early season, last season fades out of the volume rates as current games come in;
+        # shooting percentages keep more of last season
         vol_pw = PRIOR_GAME_W if OLD_PRIOR else PRIOR_GAME_W / (1.0 + nc / PRIOR_FADE)
         eff_pw = PRIOR_GAME_W if OLD_PRIOR else PRIOR_EFF_W
-        cur_w = 0.5 ** (kc / RATE_HALF_LIFE)
-        w = np.concatenate([vol_pw * 0.5 ** (kp / 40.0), cur_w])
-        w_eff = np.concatenate([eff_pw * 0.5 ** (kp / 40.0), cur_w])
-        dpl = pd.concat([dpl[dpl["yr"] == season - 1], dpl[dpl["yr"] == season]])
-        wmin = float((dpl["min"].values * w).sum())
-        pr = pos_rates.get(pos, pos_rates["F"])
-        rate = {}
-        for c in STATS:
-            if c in ("min", "pts"):
-                continue
-            tot = float((dpl[c].values * w).sum())
-            rate[c] = (tot + pr[c] * RATE_SHRINK_MIN) / (wmin + RATE_SHRINK_MIN)
-        # shooting percentages (shrunk toward league/position)
-        def wsum(c):
-            return float((dpl[c].values * w_eff).sum())
-        fg3a, fg3m, fta, ftm = wsum("fg3a"), wsum("fg3m"), wsum("fta"), wsum("ftm")
-        fg2a, fg2m = wsum("fga") - fg3a, wsum("fgm") - fg3m
-        lg3 = league_zone["three_pct"]
-        p3 = (fg3m + lg3 * 60) / (fg3a + 60)
-        ft = (ftm + 0.78 * 40) / (fta + 40)
-        z = zagg.get(pid)
-        lr = league_zone
-        if z and z["w2"] > 0:
-            rim_share = (z["wrim"] + lr["rim_share2"] * 30) / (z["w2"] + 30)
-            rim_pct = (z["wrim_m"] + lr["rim_pct"] * 25) / (z["wrim"] + 25)
-            mid_pct = (z["wmid_m"] + lr["mid_pct"] * 30) / (z["wmid"] + 30)
-            corner = (z["wcorner"] + lr["corner_share3"] * 20) / (z["w3"] + 20)
-            dunk = (z["wdunk"] + lr["dunk_rate"] * 10) / (z["wrim"] + 10)
-        else:
-            rim_share, rim_pct, mid_pct, corner, dunk = lr["rim_share2"], lr["rim_pct"], lr["mid_pct"], lr["corner_share3"], lr["dunk_rate"]
-        # make the zone split consistent with the player's overall 2P% (box scores are complete; shot logs can miss a few)
-        p2 = (fg2m + 0.53 * 50) / (fg2a + 50)
-        zone_p2 = rim_share * rim_pct + (1 - rim_share) * mid_pct
-        if zone_p2 > 0:
-            adj = p2 / zone_p2
-            rim_pct, mid_pct = min(0.9, rim_pct * adj), min(0.75, mid_pct * adj)
+        blend = ratings(vol_pw, eff_pw, zagg)
+        # this season only (players with no games yet this season fall back to the blend)
+        season_only = dict(ratings(0.0, 0.0, zagg_cur), min=round(mins_cur, 2)) if nc and mins_cur is not None else None
 
         # status: injury DNP in the team's latest game
         status, absent = "", False
@@ -516,9 +529,7 @@ def main():
         players_by_team[team].append({
             "id": pid, "name": name, "short": short_name(name), "pos": pos,
             "min": round(float(mins), 2), "start": round(starter, 3), "gp": gp,
-            "r": {k2: round(v, 5) for k2, v in rate.items()},
-            "p3": round(p3, 4), "ft": round(ft, 4), "rim": round(rim_share, 4),
-            "prim": round(rim_pct, 4), "pmid": round(mid_pct, 4), "corner": round(corner, 3), "dunk": round(dunk, 3),
+            **blend, **({"s": season_only} if season_only else {}),
             "status": status, "absent": absent, "missed3": bool(missed3),
         })
 
@@ -605,10 +616,13 @@ def main():
         dcur, dpri = d[d["yr"] == season], d[d["yr"] == season - 1].tail(30)
         w = np.concatenate([TEAM_PRIOR_W * np.ones(len(dpri)), 0.5 ** (np.arange(len(dcur))[::-1] / TEAM_HALF_LIFE)])
         dd = pd.concat([dpri, dcur])
-        f = {}
+        f, fs = {}, {}
+        wc = 0.5 ** (np.arange(len(dcur))[::-1] / TEAM_HALF_LIFE)
         for c in ["pace", "o_efg", "o_tov", "o_orb", "o_ftr", "o_3par"]:
             v = float((dd[c].values * w).sum())
             f[c] = (v + lg[c] * TEAM_SHRINK) / (w.sum() + TEAM_SHRINK)
+            vs = float((dcur[c].values * wc).sum())
+            fs[c] = (vs + lg[c] * TEAM_SHRINK) / (wc.sum() + TEAM_SHRINK)
         rec = dcur["team_winner"].astype(bool)
         teams[abbr] = {
             **meta, "abbr": abbr,
@@ -619,6 +633,8 @@ def main():
             "d_orb": round(f["o_orb"] / lg["o_orb"], 4),      # offensive rebound rate allowed vs league
             "d_ftr": round(f["o_ftr"] / lg["o_ftr"], 4),      # free-throw rate allowed vs league
             "d_3par": round(f["o_3par"] / lg["o_3par"], 4),   # 3-point attempt rate allowed vs league
+            "s": {"pace": round(fs["pace"], 2), "d_efg": round(fs["o_efg"] - lg["o_efg"], 4), "d_tov": round(fs["o_tov"] / lg["o_tov"], 4),
+                  "d_orb": round(fs["o_orb"] / lg["o_orb"], 4), "d_ftr": round(fs["o_ftr"] / lg["o_ftr"], 4), "d_3par": round(fs["o_3par"] / lg["o_3par"], 4)},
             "players": players_by_team.get(abbr, []),
             "d_base": d_base.get(abbr, 0.0),
         }
@@ -739,6 +755,7 @@ def main():
 
     model = {
         "season": season, "season_label": f"{season - 1}-{str(season)[2:]}",
+        "default_basis": os.environ.get("HW_BASIS", "season"),  # "season" = this season's stats only; "blend" = with last season
         "through": through, "asof": a.asof, "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "injury_source": "espn" if inj_n else "last-game DNPs",
         "league": league, "teams": teams, "schedule": schedule, "dvp": dvp,

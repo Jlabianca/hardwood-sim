@@ -37,7 +37,7 @@ function project() {
   const N = +arg("--n", 2000);
   const games = model.schedule.filter((g) => g.date === date && model.teams[g.away] && model.teams[g.home]);
   if (!games.length) { console.log(`tracker: no games on ${date}`); return; }
-  const out = { date, generated: new Date().toISOString(), backfill: actualOuts, n: N, data_through: model.through, games: [] };
+  const out = { date, generated: new Date().toISOString(), backfill: actualOuts, n: N, data_through: model.through, basis: arg("--basis", model.default_basis || "blend"), games: [] };
   for (const g of games) {
     let outs;
     if (actualOuts) { // who actually sat is known at tip-off; use it for backfilled days
@@ -48,7 +48,8 @@ function project() {
       }
     } else outs = Sim.defaultOut(model, [g.away, g.home]);
     const rest = { away: restCat(model, g.away, date), home: restCat(model, g.home, date) };
-    const agg = Sim.simulateMany(model, { away: g.away, home: g.home, out: outs, rest, seed: 4242 }, N);
+    const basis = arg("--basis", model.default_basis || "blend");
+    const agg = Sim.simulateMany(model, { away: g.away, home: g.home, out: outs, rest, seed: 4242, basis }, N);
     const margin = Array.from(agg.home, (h, i) => h - agg.away[i]), total = Array.from(agg.home, (h, i) => h + agg.away[i]);
     const players = [];
     for (const id in agg.players) {

@@ -52,6 +52,17 @@
     initPicker();
     initTabs();
     initControls();
+    if (basis !== "season" && basis !== "blend") basis = model.default_basis || "season";
+    $("basisSel").value = basis;
+    $("basisSel").onchange = () => {
+      basis = $("basisSel").value;
+      try { localStorage.setItem("hw_basis", basis); } catch (e) {}
+      projStale = true; projResult = null; slateStale = true;
+      newGame(seed);
+      if (activeTab() === "proj") runProjections();
+      if (activeTab() === "slate" || activeTab() === "today") runSlate();
+      toast(basis === "season" ? "Model now uses this season's stats only" : "Model now blends this season with last season");
+    };
     applyMode();
     document.body.dataset.tab = "today";
     $("modeSimple").onclick = () => { simple = true; applyMode(); if (slate) renderToday(); };
@@ -222,7 +233,7 @@
     return m;
   }
   function simOpts(extra) {
-    return Object.assign({ away: cur.away, home: cur.home, out: [...outSet], minutes: teamMinutes([cur.away, cur.home]), neutral: $("neutralChk").checked,
+    return Object.assign({ away: cur.away, home: cur.home, out: [...outSet], minutes: teamMinutes([cur.away, cur.home]), neutral: $("neutralChk").checked, basis,
       rest: { away: $("restAway").value, home: $("restHome").value } }, extra);
   }
   function newGame(s) {
@@ -543,7 +554,7 @@
   const wpCache = {};
   function wpParams() {
     const o = simOpts({ seed: 777 });
-    const key = JSON.stringify([o.away, o.home, o.out.slice().sort(), o.minutes, o.neutral, o.rest]);
+    const key = JSON.stringify([o.away, o.home, o.out.slice().sort(), o.minutes, o.neutral, o.rest, o.basis]);
     if (!wpCache[key]) {
       const a = NBASim.simulateMany(model, o, 400);
       const m = Array.from(a.home, (h, i) => h - a.away[i]), mu = meanOf(m);
@@ -979,7 +990,7 @@
     return null;
   }
   function openPlayer(id, stat, key) {
-    card = { id, stat: CARD_STATS.includes(stat) ? stat : "pts", key: key || null, vs: null };
+    card = { id, stat: CARD_STATS.includes(stat) ? stat : "pts", key: key || null, vs: null, season: null };
     $("pcard").classList.remove("hidden");
     $("pcardBox").innerHTML = `<p class="dim">Loading game logs…</p>`;
     loadLogs().then(renderCard);
@@ -990,8 +1001,15 @@
     const { id, stat: k } = card, P = players[id];
     let mp = null; for (const t in model.teams) { const f = model.teams[t].players.find((x) => x.id === id); if (f) { mp = f; break; } }
     const rows = (logs && logs.players && logs.players[id]) || [];
-    const played = rows.filter((r) => !r[19]);
-    const cur_ = played.filter((r) => r[3] === model.season);
+    // season filter (default: this season); "all" = every season in the data
+    const selY = card.season || String(model.season);
+    const inSel = (r) => selY === "all" || r[3] === +selY;
+    const played = rows.filter((r) => !r[19] && inSel(r));
+    const cur_ = played;
+    const yrs = [...new Set(rows.map((r) => r[3]))].sort((a, b) => b - a);
+    if (!yrs.includes(model.season)) yrs.unshift(model.season);
+    const seasonOpts = yrs.map((y) => `<option value="${y}" ${String(y) === selY ? "selected" : ""}>${y === model.season ? "This season" : seasonLbl(y)}</option>`).join("") +
+      `<option value="all" ${selY === "all" ? "selected" : ""}>All seasons</option>`;
     const sim = simFor(id, card.key);
     const team = P.team, [ga, gh] = (card.key || "").split("@");
     const opp = card.key ? (team === ga ? gh : team === gh ? ga : null) : null;
@@ -1007,9 +1025,9 @@
     const f1 = (x) => (x == null ? "–" : x.toFixed(1));
     const cards = [
       ["Model tonight", sim ? f1(simMean) : "–", sim ? `median ${quant(sim.d[k], 0.5)} · over ${line}: ${pct(pOver(sim.d[k], line))}` : "run this game (Projections or Slate)"],
-      ["This season", f1(avg(cur_)), `${cur_.length} games · over ${line}: ${hit(cur_)}`],
+      [selY === "all" ? "All seasons" : +selY === model.season ? "This season" : seasonLbl(+selY), f1(avg(cur_)), `${cur_.length} games · over ${line}: ${hit(cur_)}`],
       ["Last 5", f1(avg(L5)), `over ${line}: ${hit(L5)}`],
-      ["Last 10", f1(avg(L10)), `over ${line}: ${hit(L10)}${L10.some((r) => r[3] !== model.season) ? " (incl. last season)" : ""}`],
+      ["Last 10", f1(avg(L10)), `over ${line}: ${hit(L10)}${L10.length < 10 ? ` (only ${L10.length} games)` : ""}`],
     ];
     if (opp) cards.push([`vs ${opp}`, f1(avg(vsOpp)), vsOpp.length ? `${vsOpp.length} game${vsOpp.length > 1 ? "s" : ""} · over ${line}: ${hit(vsOpp)}` : "no games in the data"]);
     const statOpts = CARD_STATS.map((x) => `<option value="${x}" ${x === k ? "selected" : ""}>${STAT_LBL[x]}</option>`).join("");
@@ -1033,7 +1051,7 @@
     const cols = ["min", "pts", "reb", "ast", "fg3m", "stl", "blk", "tov"];
     const hlCols = COMBO[k] || [k];
     let lastYr = null;
-    const shown = rows.filter((r) => r[3] === model.season).concat(rows.filter((r) => r[3] !== model.season).slice(-15));
+    const shown = rows.filter(inSel);
     shown.sort((a, b) => (a[0] < b[0] ? -1 : 1));
     const logRows = shown.slice().reverse().map((r) => {
       let pre = "";
@@ -1056,10 +1074,10 @@
       <h2>${P.name} <span class="pos">${P.pos}</span> <button class="fav ${favs.has(id) ? "on" : ""}" id="pcFav" title="Pin this player on the Today page">${favs.has(id) ? "★ Favorite" : "☆ Favorite"}</button></h2>
       <div class="meta"><span class="teamtag" style="background:${col(team)}"></span>${model.teams[team].name}${opp ? ` · tonight ${team === gh ? "vs" : "@"} ${opp}` : ""}${mp ? ` · proj ${mp.min.toFixed(1)} min · DEF ${(mp.d || 0) > 0 ? "+" : ""}${(mp.d || 0).toFixed(1)}` : ""}${st}</div>
       ${take}
-      <div class="ctl"><label>Stat <select id="pcStat">${statOpts}</select></label><label>Line <input id="pcLine" type="number" step="0.5" value="${line}"></label>${slipBtn}
+      <div class="ctl"><label>Season <select id="pcSeason">${seasonOpts}</select></label><label>Stat <select id="pcStat">${statOpts}</select></label><label>Line <input id="pcLine" type="number" step="0.5" value="${line}"></label>${slipBtn}
         <span class="dim">Green = over the line, red = under. The line is shared with the props tables.</span></div>
       <div class="cards">${cards.map(([a, b2, c]) => `<div class="card"><div class="k">${a}</div><div class="v">${b2}</div><div class="s">${c}</div></div>`).join("")}</div>
-      <div class="charts2"><div><h4>Last ${bars.length} games · ${STAT_LBL[k]}</h4><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
+      <div class="charts2"><div><h4>Last ${bars.length} games${selY === "all" ? "" : ` (${+selY === model.season ? "this season" : seasonLbl(+selY)})`} · ${STAT_LBL[k]}</h4><svg viewBox="0 0 ${W} ${H}">${svg}</svg></div>
         <div><h4>Model distribution tonight</h4>${sim ? `<svg id="pcHist" viewBox="0 0 600 200"></svg>` : `<p class="dim">Not simulated yet. Open the game on Projections or run the Slate.</p>`}</div></div>
       ${sim ? `<h4 class="lad adv">Alt-line ladder · ${STAT_LBL[k]} <span class="dim" style="text-transform:none;letter-spacing:0">· type a book's price on any rung for its EV; O / U adds that rung to the parlay</span></h4><div class="scrollx adv"><table class="props ladder" id="pcLadder"></table></div>` : ""}
       ${matchupLine(P, opp, k)}
@@ -1081,6 +1099,7 @@
     $("pcFav").onclick = () => { toggleFav(id); renderCard(); };
     if ($("pcVs")) $("pcVs").onchange = () => { card.vs = $("pcVs").value; renderCard(); };
     $("pcStat").onchange = () => { card.stat = $("pcStat").value; renderCard(); };
+    $("pcSeason").onchange = () => { card.season = $("pcSeason").value; renderCard(); };
     $("pcLine").onchange = () => {
       if ($("pcLine").value === "") delete lines[key]; else lines[key] = +$("pcLine").value;
       renderCard();
@@ -1379,6 +1398,8 @@
     const verdict = ratio >= 1.08 ? `<b class="edge-hi">a good price</b>` : ratio >= 1.0 ? "about a fair price" : ratio >= 0.92 ? "a slightly bad price" : `<b class="edge-lo">a bad price</b>`;
     return `The model says this hits ${oneIn(p)}. The book pays like it hits ${oneIn(be)} — ${verdict}.`;
   }
+  let basis = null; // "season" (this season's stats only) or "blend" (with last season); default from the model
+  try { basis = localStorage.getItem("hw_basis"); } catch (e) {}
   let simple = true;
   try { const m = localStorage.getItem("hw_mode"); if (m) simple = m === "simple"; } catch (e) {}
   function applyMode() {
@@ -1484,7 +1505,7 @@
     // this season vs. last season: early on, the model expects players to drift back toward their usual level
     const allRows = ((logs && logs.players && logs.players[id]) || []).filter((r) => !r[19]);
     const prevRows = allRows.filter((r) => r[3] === model.season - 1);
-    if (rs.length >= 3 && prevRows.length >= 15) {
+    if (basis === "blend" && rs.length >= 3 && prevRows.length >= 15) {
       const ca = meanOf(rs.map((r) => logVal(r, k))), pa = meanOf(prevRows.map((r) => logVal(r, k)));
       const thr = { pts: 3, reb: 1.5, ast: 1.5, fg3m: 0.6, pra: 4 }[k] || 2;
       if (Math.abs(pa - ca) >= thr && (pa > ca) === (side === "o"))
@@ -1565,7 +1586,7 @@
     const L10 = (((logs && logs.players && logs.players[pl.p.id]) || []).filter((r) => !r[19])).slice(-10);
     const ov10 = L10.filter((r) => logVal(r, pl.k) > pl.line).length;
     const against = L10.length >= 8 && (pl.side === "u" ? ov10 >= 7 : L10.length - ov10 >= 7);
-    const tag = against ? `<div class="against" title="In the tracker's graded games, when the model leaned against a player's last 10 like this, the model was right about 65% of the time.">↯ Goes against his last 10 (${pl.side === "u" ? `${ov10} of ${L10.length} over` : `${L10.length - ov10} of ${L10.length} under`}) — when that happened in our tracked games, the model was still right about 2 in 3 times</div>` : "";
+    const tag = against ? `<div class="against">↯ Goes against his last 10 (${pl.side === "u" ? `${ov10} of ${L10.length} over` : `${L10.length - ov10} of ${L10.length} under`})${basis === "blend" ? " — when that happened in our tracked games, the model was still right about 2 in 3 times" : ""}</div>` : "";
     return `<div class="play"><div class="what"><span class="pl" data-pid="${pl.p.id}" data-stat="${pl.k}" data-key="${key}">${pl.p.name}</span> <span class="dim">${pl.p.team} ${opp}</span></div>
       <div class="what">${pl.side === "o" ? "OVER" : "UNDER"} ${pl.line} ${STAT_LBL[pl.k]}</div>
       <div class="conf"><span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · ${both(`${pct(pl.pr)} · fair ${american(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`, `hits ${inTen(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`)}${pl.user ? "" : ' <span class="dim">· line = his season average</span>'}${!pl.user && Math.abs(pl.role || 0) >= 6 ? ` <span class="st">· ${pl.role > 0 ? "bigger" : "smaller"} role tonight — books will likely adjust this line</span>` : ""}</div>
@@ -1651,7 +1672,7 @@
   const BREAK_EVEN = 0.5238; // -110
   function slateOpts(g) {
     const teams = [g.away, g.home];
-    return { away: g.away, home: g.home, out: [...outFor(teams)], minutes: teamMinutes(teams), neutral: !!g.neutral,
+    return { away: g.away, home: g.home, out: [...outFor(teams)], minutes: teamMinutes(teams), neutral: !!g.neutral, basis,
       rest: { away: restCat(g.away, g.date), home: restCat(g.home, g.date) }, seed: 12345 };
   }
   function runSlate() {

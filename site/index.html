@@ -15,6 +15,9 @@
   <div class="hdrtools">
     <input id="search" type="search" list="playerList" placeholder="🔍 Find a player" autocomplete="off">
     <datalist id="playerList"></datalist>
+    <select id="basisSel" title="Which games the model learns from. 'This season' uses only 2026-27 games; 'This + last season' blends in last season (steadier early in the year).">
+      <option value="season">Stats: this season</option><option value="blend">Stats: this + last season</option>
+    </select>
     <div class="modes" role="group" aria-label="Display mode">
       <button id="modeSimple" class="mode">Simple</button><button id="modeAdv" class="mode">Advanced</button>
     </div>
