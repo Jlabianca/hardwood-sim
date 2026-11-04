@@ -1463,7 +1463,7 @@
     for (const X of mates) {
       const w = ww.find((z) => z.X.id === X.id);
       const thr = k === "pts" || k === "pra" ? 1.5 : 0.7;
-      const last = lastName(X.name);
+      const last = X.short || lastName(X.name);
       if (w && w.wo >= 3 && Math.abs(w.diff) >= thr) add(w.diff > 0, `${last} is out — he averages ${w.diff > 0 ? "+" : ""}${w.diff.toFixed(1)} ${SN} without him (${w.wo} games)`);
       else if (!generic && X.min >= 25) { generic++; add(true, `${last} is out, so there are more shots and minutes to go around`); }
     }
@@ -1480,6 +1480,22 @@
       const pm = meanOf(Array.from(sim.raw ? sim.raw.min : sim.d.min)), sm = meanOf(rs.map((r) => r[4]));
       if (pm - sm >= 3) add(true, `projected for more minutes than usual (${pm.toFixed(0)} vs. ${sm.toFixed(0)})`);
       if (sm - pm >= 3) add(false, `projected for fewer minutes than usual (${pm.toFixed(0)} vs. ${sm.toFixed(0)})`);
+    }
+    // this season vs. last season: early on, the model expects players to drift back toward their usual level
+    const allRows = ((logs && logs.players && logs.players[id]) || []).filter((r) => !r[19]);
+    const prevRows = allRows.filter((r) => r[3] === model.season - 1);
+    if (rs.length >= 3 && prevRows.length >= 15) {
+      const ca = meanOf(rs.map((r) => logVal(r, k))), pa = meanOf(prevRows.map((r) => logVal(r, k)));
+      const thr = { pts: 3, reb: 1.5, ast: 1.5, fg3m: 0.6, pra: 4 }[k] || 2;
+      if (Math.abs(pa - ca) >= thr && (pa > ca) === (side === "o"))
+        pro.unshift(`he averaged ${pa.toFixed(1)} last season vs. ${ca.toFixed(1)} so far (${rs.length} games) — early in the season the model expects him to drift back toward his usual level`);
+    }
+    // last 10 games vs. this line (shown first under "watch out" when it disagrees)
+    const L10 = allRows.slice(-10);
+    if (L10.length >= 8) {
+      const ov = L10.filter((r) => logVal(r, k) > line).length;
+      if (side === "u" && ov >= 7) con.unshift(`he's gone over ${line} in ${ov} of his last ${L10.length}`);
+      if (side === "o" && L10.length - ov >= 7) con.unshift(`he's stayed under ${line} in ${L10.length - ov} of his last ${L10.length}`);
     }
     // recent form vs the line
     const L5 = rs.slice(-5);
@@ -1546,9 +1562,14 @@
   function playCard(pl, compact) {
     const c = conf(pl.pr), key = `${pl.x.g.away}@${pl.x.g.home}`, opp = pl.p.team === pl.x.g.home ? `vs ${pl.x.g.away}` : `@ ${pl.x.g.home}`;
     const why = whyHtml(reasonsFor(pl.p.id, pl.k, pl.side, { g: pl.x.g, res: pl.x.res, rest: pl.x.opts.rest }, pl.line));
+    const L10 = (((logs && logs.players && logs.players[pl.p.id]) || []).filter((r) => !r[19])).slice(-10);
+    const ov10 = L10.filter((r) => logVal(r, pl.k) > pl.line).length;
+    const against = L10.length >= 8 && (pl.side === "u" ? ov10 >= 7 : L10.length - ov10 >= 7);
+    const tag = against ? `<div class="against" title="In the tracker's graded games, when the model leaned against a player's last 10 like this, the model was right about 65% of the time.">↯ Goes against his last 10 (${pl.side === "u" ? `${ov10} of ${L10.length} over` : `${L10.length - ov10} of ${L10.length} under`}) — when that happened in our tracked games, the model was still right about 2 in 3 times</div>` : "";
     return `<div class="play"><div class="what"><span class="pl" data-pid="${pl.p.id}" data-stat="${pl.k}" data-key="${key}">${pl.p.name}</span> <span class="dim">${pl.p.team} ${opp}</span></div>
       <div class="what">${pl.side === "o" ? "OVER" : "UNDER"} ${pl.line} ${STAT_LBL[pl.k]}</div>
       <div class="conf"><span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · ${both(`${pct(pl.pr)} · fair ${american(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`, `hits ${inTen(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`)}${pl.user ? "" : ' <span class="dim">· line = his season average</span>'}${!pl.user && Math.abs(pl.role || 0) >= 6 ? ` <span class="st">· ${pl.role > 0 ? "bigger" : "smaller"} role tonight — books will likely adjust this line</span>` : ""}</div>
+      ${tag}
       ${compact ? "" : `<div class="why">${why}</div>`}
       <div class="acts" style="margin-top:6px"><button class="add" data-tk="${key}" data-tid="${pl.p.id}" data-ts="${pl.k}" data-tside="${pl.side}" data-tl="${pl.line}">+ Parlay</button></div></div>`;
   }
