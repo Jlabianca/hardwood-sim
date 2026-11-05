@@ -2,6 +2,7 @@
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
+  const VQ = (() => { try { return new URL(document.currentScript.src).search; } catch (e) { return ""; } })(); // version tag, so browsers fetch fresh files after each update
 
   let model = null, cur = { away: null, home: null }, outSet = new Set(), minutes = {}, seed = 1, game = null;
   const userOut = {}; // player id -> true (out) / false (in): your edits, kept across games and used by the slate
@@ -637,7 +638,7 @@
       renderProjections();
     };
     try {
-      if (!worker) { worker = new Worker("js/worker.js"); worker.postMessage({ model }); }
+      if (!worker) { worker = new Worker("js/worker.js" + VQ); worker.postMessage({ model }); }
       worker.onmessage = (e) => {
         if (e.data.progress != null) $("prog").style.width = (e.data.progress * 100).toFixed(0) + "%";
         if (e.data.done) finish(e.data.result);
@@ -1704,7 +1705,7 @@
       const g = games[k], opts = slateOpts(g);
       $("slateInfo").textContent = `simulating ${g.away} @ ${g.home} (${k + 1} of ${games.length})…`;
       try {
-        if (!slateWorker) { slateWorker = new Worker("js/worker.js"); slateWorker.postMessage({ model }); }
+        if (!slateWorker) { slateWorker = new Worker("js/worker.js" + VQ); slateWorker.postMessage({ model }); }
         slateWorker.onmessage = (e) => {
           if (e.data.progress != null) $("slateProg").style.width = $("todayProg").style.width = (((k + e.data.progress) / games.length) * 100).toFixed(0) + "%";
           if (e.data.done) { store(g, opts, e.data.result); k++; next(); }

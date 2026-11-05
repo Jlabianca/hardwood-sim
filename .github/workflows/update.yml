@@ -55,6 +55,8 @@ jobs:
               echo "::warning title=tracker::could not push saved projections (will retry next run)"
             fi
           fi
+      - name: Stamp file versions (so browsers load the new code)
+        run: sed -i "s/__V__/${GITHUB_SHA::7}-$(date +%s)/g" site/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

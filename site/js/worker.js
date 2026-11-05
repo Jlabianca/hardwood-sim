@@ -1,5 +1,5 @@
 /* Runs many simulations off the main thread and returns sorted per-player distributions. */
-importScripts("sim.js");
+importScripts("sim.js" + self.location.search); // same version tag as the page
 let model = null;
 self.onmessage = (e) => {
   const m = e.data;
