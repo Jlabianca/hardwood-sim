@@ -1693,12 +1693,14 @@
     $("btnSlate").disabled = true; $("slateProg").style.width = "0%";
     let k = 0;
     const finish = () => {
+      run.done = true;
       $("btnSlate").disabled = false; $("slateProg").style.width = "100%";
       $("slateInfo").textContent = `${games.length} games × ${n.toLocaleString()} sims in ${((performance.now() - t0) / 1000).toFixed(1)}s · ${fmtDay(date)}`;
       renderSlate();
       renderToday();
+      renderLive();
     };
-    const store = (g, opts, res) => { if (slate === run) { run.games.push({ g, opts, res }); if (activeTab() === "today") renderToday(); } };
+    const store = (g, opts, res) => { if (slate === run) { run.games.push({ g, opts, res }); if (activeTab() === "today") renderToday(); if (activeTab() === "live") renderLive(); } };
     const next = () => {
       if (slate !== run) return; // a newer run started
       if (k >= games.length) return finish();
@@ -2122,6 +2124,7 @@
     if (!gs.length) { $("liveGames").innerHTML = live.at ? `<p class="dim">No NBA games today.</p>` : ""; $("liveBets").innerHTML = $("livePlays").innerHTML = $("liveFavs").innerHTML = ""; return; }
     const byKey = {}; for (const g of gs) byKey[liveKey(g)] = g;
     const waiting = !slate || slate.date !== live.day || !slate.games.length;
+    const simming = !slate || slate.date !== live.day || !slate.done;
     // ---- your bets ----
     const keys = Object.keys(sgpByGame).filter((k) => sgpByGame[k].length && byKey[k]);
     let bets = "";
@@ -2159,10 +2162,10 @@
     // ---- games ----
     const ord = { in: 0, pre: 1, post: 2 };
     const shown = gs.slice().sort((a, b) => ord[a.state] - ord[b.state] || new Date(a.start) - new Date(b.start));
-    $("liveGames").innerHTML = (waiting && gs.some((g) => g.state !== "post") ? `<p class="dim">Simulating today's games for the live win chances… (${$("todayProg").style.width || "0%"})</p>` : "") + shown.map((g) => {
+    $("liveGames").innerHTML = (simming && gs.some((g) => g.state !== "post") ? `<p class="dim">Simulating today's games for the live win chances… (${$("todayProg").style.width || "0%"})</p>` : "") + shown.map((g) => {
       const P = liveRes(g), ph = liveWin(g, P), A = g.away, H = g.home;
       if (ph != null && g.state === "in") { const h = live.hist[g.id] || (live.hist[g.id] = []), el = 2880 - liveLeft(g) + (g.period > 4 ? (g.period - 4) * 300 : 0); if (!h.length || h[h.length - 1][0] !== el) h.push([el, ph]); }
-      const pre = P ? `Model before tip: ${P.muM >= 0 ? H : A} by ${Math.abs(P.muM).toFixed(1)}, total ${P.muT.toFixed(0)}` : g.state === "post" ? "" : `<span class="dim">no simulation for this game</span>`;
+      const pre = P ? `Model before tip: ${P.muM >= 0 ? H : A} by ${Math.abs(P.muM).toFixed(1)}, total ${P.muT.toFixed(0)}` : g.state === "post" ? "" : `<span class="dim">${simming ? "simulating this game…" : "no simulation for this game"}</span>`;
       const lead = ph == null ? "" : ph >= 0.5 ? [H, ph] : [A, 1 - ph];
       const wpTxt = ph == null ? "" : g.state === "post" ? `<b style="color:${col(lead[0])}">${lead[0]}</b> won` : `<b style="color:${col(lead[0])}">${lead[0]}</b> ${Math.round(lead[1] * 100) >= 100 ? ">99" : Math.round(lead[1] * 100)}% to win`;
       const bar = ph == null ? "" : `<div class="bar"><i style="width:${((1 - ph) * 100).toFixed(1)}%;background:${col(A)}"></i><i style="width:${(ph * 100).toFixed(1)}%;background:${col(H)}"></i></div>`;
