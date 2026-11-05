@@ -251,3 +251,31 @@ footer { padding: 18px 22px 30px; font-size: 11px; border-top: 1px solid var(--l
   .rosters label, .rosters .hdr { grid-template-columns: 22px 1fr 90px 60px 40px; }
   .rosters label > span:nth-child(n+6), .rosters .hdr > span:nth-child(n+6) { display: none; }
 }
+
+/* live */
+.livedot { color: var(--bad); font-size: 10px; vertical-align: 1px; }
+body[data-tab="live"] .picker { display: none; }
+.lgame.in { border-color: #3a2a1e; }
+.lgame .when.onair { color: var(--bad); font-weight: 600; }
+.lgame .teams b { font-size: 18px; }
+.lspark { width: 100%; height: 34px; display: block; }
+.lsparkl { display: flex; justify-content: space-between; font-size: 10px; margin-top: -2px; }
+.lchip { font: 600 12px var(--mono); padding: 2px 7px; border-radius: 10px; background: var(--panel2); border: 1px solid var(--line); white-space: nowrap; }
+.lchip.good { color: var(--good); } .lchip.bad { color: var(--bad); }
+.lchip.win { background: #12301f; color: var(--good); border-color: #1d4a31; }
+.lchip.lose { background: #331616; color: var(--bad); border-color: #4c2222; }
+.lslip .leg { grid-template-columns: 1fr auto auto; }
+.lhead { margin-bottom: 8px; }
+.ltable { overflow-x: auto; }
+.ltable table, .lbox table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ltable th, .ltable td, .lbox th, .lbox td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.ltable th, .lbox th { font: 11px var(--mono); color: var(--dim); text-transform: uppercase; }
+.lbox { margin-top: 8px; overflow-x: auto; }
+.lbox td, .lbox th { padding: 3px 6px; }
+.lboxh { font: 600 13px var(--mono); margin-bottom: 2px; }
+.lbox tr.dnp td { color: var(--dim); }
+.bad { color: var(--bad); }
+#liveGames { align-items: start; }
+.lgame.wide { grid-column: 1 / -1; }
+.lgame.wide .lboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 860px) { .lgame.wide .lboxes { grid-template-columns: 1fr; } }

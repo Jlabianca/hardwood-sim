@@ -24,6 +24,7 @@
   </div>
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="today" role="tab">Today</button>
+    <button class="tab" data-tab="live" role="tab"><span class="livedot">●</span> Live</button>
     <button class="tab" data-tab="watch" role="tab">Watch a sim</button>
     <button class="tab" data-tab="slate" role="tab">Slate</button>
     <button class="tab" data-tab="proj" role="tab">Projections &amp; props</button>
@@ -55,6 +56,17 @@
     <h3 class="sec">Games</h3>
     <div class="gcards" id="todayGames"></div>
     <p class="note">Every number comes from simulating each game thousands of times. "Favorite plays" compare the model with each player's season average (or your own line, if you typed one), not with a sportsbook line. The model hasn't been shown to beat the books, so use these as a starting point for research, not as bets.</p>
+  </section>
+
+  <!-- LIVE -->
+  <section id="tab-live" class="pane">
+    <div class="todayhead"><h2>Live</h2><span class="dim" id="liveInfo"></span></div>
+    <div id="liveBets"></div>
+    <div id="livePlays"></div>
+    <div id="liveFavs"></div>
+    <h3 class="sec">Games</h3>
+    <div class="gcards" id="liveGames"></div>
+    <p class="note">Scores come from ESPN's public scoreboard. Live chances start from the model's pre-game simulation and update with the score, the clock and each player's box score, so they lean on the model early in a game and on the scoreboard late. Your parlay slip is saved in this browser, so legs you add on the other tabs show up here.</p>
   </section>
 
   <!-- WATCH -->

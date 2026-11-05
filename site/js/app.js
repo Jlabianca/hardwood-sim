@@ -175,6 +175,7 @@
       if (t.dataset.tab === "proj" && projStale) runProjections();
       if (t.dataset.tab === "dvp") renderDvp();
       if (t.dataset.tab === "track") renderTracker();
+      if (t.dataset.tab === "live") { startLive(); renderLive(); } else stopLive();
       if ((t.dataset.tab === "slate" || t.dataset.tab === "today") && (slateStale || !slate || slate.date !== $("dateSel").value)) runSlate();
       else if (t.dataset.tab === "today") renderToday();
     }));
@@ -792,6 +793,11 @@
 
   // ---------------- same-game parlay ----------------
   const sgpByGame = {}; // "AWAY@HOME" -> legs
+  try { // keep the slip across page reloads (for a day and a half), so the Live tab can track it
+    const sv = JSON.parse(localStorage.getItem("hw_slip") || "null");
+    if (sv && Date.now() - sv.at < 36 * 3600e3) for (const k in sv.legs || {}) if (Array.isArray(sv.legs[k])) sgpByGame[k] = sv.legs[k];
+  } catch (e) {}
+  const saveSlip = () => { try { localStorage.setItem("hw_slip", JSON.stringify({ at: Date.now(), legs: sgpByGame })); } catch (e) {} };
   const STAT_LBL = { pts: "points", reb: "rebounds", ast: "assists", fg3m: "3-pointers", pra: "pts+reb+ast", pr: "pts+reb", pa: "pts+ast", ra: "reb+ast",
     stl: "steals", blk: "blocks", stocks: "steals+blocks", tov: "turnovers", min: "minutes", dd: "double-double", td: "triple-double" };
   const sgpKey = (a, h) => `${a || cur.away}@${h || cur.home}`;
@@ -1326,6 +1332,7 @@
     return null;
   }
   function renderSlip() {
+    saveSlip();
     if (!$("slipBody")) return;
     const keys = Object.keys(sgpByGame).filter((k) => sgpByGame[k].length);
     if (!keys.length) {
@@ -1937,5 +1944,265 @@
     slateStale = true;
     renderRoster();
     newGame(seed);
+  }
+  // ---------------- live ----------------
+  const ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/";
+  const LIVE_SD = 0.82; // the sim's final margins spread about 20% wider than real games: shrink before using them live
+  const live = { day: null, games: [], box: {}, hist: {}, open: {}, timer: null, at: null, err: null, busy: false };
+  const BOX_COL = { MIN: "min", PTS: "pts", REB: "reb", AST: "ast", STL: "stl", BLK: "blk", TO: "tov", PF: "pf" };
+  function liveLeft(g) { // seconds left in the game (regulation, or this overtime)
+    if (g.state === "pre") return 2880;
+    if (g.state === "post") return 0;
+    const c = String(g.clock || "0"), sec = c.includes(":") ? +c.split(":")[0] * 60 + +c.split(":")[1] : +c;
+    return g.period <= 4 ? (4 - g.period) * 720 + sec : sec;
+  }
+  function liveFetch() {
+    if (live.busy) return Promise.resolve();
+    live.busy = true;
+    return fetch(ESPN + "scoreboard", { cache: "no-store" }).then((r) => r.json()).then((j) => {
+      live.err = null;
+      live.day = j.day && j.day.date ? j.day.date : todayET();
+      live.games = (j.events || []).map((e) => {
+        const c = e.competitions[0], tm = (s) => c.competitors.find((x) => x.homeAway === s) || {};
+        const A = tm("away"), H = tm("home");
+        return { id: e.id, away: A.team && A.team.abbreviation, home: H.team && H.team.abbreviation, as: +A.score || 0, hs: +H.score || 0,
+          state: e.status.type.state, period: e.status.period, clock: e.status.displayClock, detail: e.status.type.shortDetail, start: e.date,
+          half: e.status.type.name === "STATUS_HALFTIME" };
+      });
+      live.at = new Date();
+      // box scores: the games you opened, plus any in-progress or finished game you're tracking a player in
+      const want = live.games.filter((g) => g.state !== "pre" && (live.open[g.id] || liveTracked(g)));
+      return Promise.all(want.map((g) => g.state === "post" && live.box[g.id] && live.box[g.id].final ? null : fetch(ESPN + "summary?event=" + g.id, { cache: "no-store" }).then((r) => r.json()).then((s) => {
+        const out = {};
+        for (const side of (s.boxscore && s.boxscore.players) || []) {
+          const st = side.statistics && side.statistics[0];
+          if (!st) continue;
+          for (const a of st.athletes || []) {
+            const row = { dnp: a.didNotPlay, team: side.team && side.team.abbreviation, starter: a.starter };
+            (st.names || st.labels || []).forEach((nm, i) => {
+              const v = (a.stats || [])[i];
+              if (BOX_COL[nm]) row[BOX_COL[nm]] = +v || 0;
+              if (nm === "3PT") row.fg3m = +String(v || "0").split("-")[0] || 0;
+            });
+            out[a.athlete.id] = row;
+          }
+        }
+        live.box[g.id] = { at: Date.now(), final: g.state === "post", p: out };
+      }).catch(() => {})));
+    }).catch((e) => { live.err = "Couldn't reach the live scoreboard (" + e.message + "). Retrying…"; })
+      .finally(() => { live.busy = false; renderLive(); });
+  }
+  function startLive() {
+    stopLive();
+    const tick = () => {
+      liveFetch().then(() => {
+        const anyLive = live.games.some((g) => g.state === "in"), soon = live.games.some((g) => g.state === "pre" && new Date(g.start) - Date.now() < 20 * 60000);
+        live.timer = setTimeout(tick, anyLive || soon ? 20000 : 120000);
+      });
+      if (live.day && model && (!slate || slate.date !== live.day) && model.schedule.some((g) => g.date === live.day) && $("dateSel").value !== live.day) {
+        $("dateSel").value = live.day; renderGames(); slateStale = true;
+      }
+      if (model && (!slate || slateStale || slate.date !== $("dateSel").value)) runSlate();
+    };
+    tick();
+  }
+  function stopLive() { clearTimeout(live.timer); live.timer = null; }
+  document.addEventListener("visibilitychange", () => { if (activeTab() === "live") (document.hidden ? stopLive() : startLive()); });
+
+  const liveKey = (g) => `${g.away}@${g.home}`;
+  function liveRes(g) {
+    if (!slate || slate.date !== live.day) return null;
+    const x = slate.games.find((y) => y.g.away === g.away && y.g.home === g.home);
+    if (!x) return null;
+    if (!x._lv) {
+      const r = x.res, m = Array.from(r.home, (h, i) => h - r.away[i]), t = Array.from(r.home, (h, i) => h + r.away[i]);
+      const sd = (a, mu) => Math.sqrt(meanOf(a.map((v) => (v - mu) ** 2)));
+      const muM = meanOf(m), muT = meanOf(t), h1 = Array.from(r.home1h, (h, i) => h + r.away1h[i]), muH1 = meanOf(h1);
+      const muH = meanOf(Array.from(r.home)), muA = meanOf(Array.from(r.away));
+      x._lv = { muM, sdM: sd(m, muM), muT, sdT: sd(t, muT), muH, sdH: sd(Array.from(r.home), muH), muA, sdA: sd(Array.from(r.away), muA), muH1, sdH1: sd(h1, muH1), res: r };
+    }
+    return x._lv;
+  }
+  const Phi = (z) => normCdf(z);
+  // probability a quantity finishes above `line`, given what's in already and a normal guess for the rest
+  function pFinishOver(cur, remMu, remSd, line) {
+    if (remSd <= 1e-6) return cur + remMu > line ? 1 : 0;
+    return 1 - Phi((line - cur - remMu) / remSd);
+  }
+  function liveWin(g, P) { // home team's chance to win
+    const m = g.hs - g.as, f = liveLeft(g) / 2880;
+    if (g.state === "post") return m > 0 ? 1 : 0;
+    if (!P) return null;
+    if (f <= 0) return m > 0 ? 1 : m < 0 ? 0 : 0.5;
+    return Phi((m + P.muM * f) / (P.sdM * LIVE_SD * Math.sqrt(f)));
+  }
+  function liveStat(row, stat) {
+    if (!row) return null;
+    const v = (k) => row[k] || 0;
+    if (stat === "pra") return v("pts") + v("reb") + v("ast");
+    if (stat === "pr") return v("pts") + v("reb");
+    if (stat === "pa") return v("pts") + v("ast");
+    if (stat === "ra") return v("reb") + v("ast");
+    if (stat === "stocks") return v("stl") + v("blk");
+    if (stat === "dd" || stat === "td") { const c = ["pts", "reb", "ast", "stl", "blk"].filter((k) => v(k) >= 10).length; return c >= (stat === "dd" ? 2 : 3) ? 1 : 0; }
+    return v(stat);
+  }
+  /* Where a player is heading: what's in, the minutes he likely has left, and the chance he clears a line. */
+  function livePlayer(g, P, id, stat, line) {
+    const bx = live.box[g.id], row = bx && bx.p[id];
+    const pr = P && P.res.players[id];
+    const cur = row ? liveStat(row, stat) : g.state === "pre" ? 0 : null;
+    if (cur == null) return { cur: null };
+    const f = liveLeft(g) / 2880, done = g.state === "post" || (row && (row.pf >= 6 || (row.dnp && g.state !== "pre")));
+    if (!pr || stat === "dd" || stat === "td") {
+      return { cur, done, p: done ? (line != null ? (cur > line ? 1 : 0) : null) : null, pace: null };
+    }
+    const projMin = meanOf(pr.d.min), projV = meanOf(pr.d[stat]), sdV = Math.sqrt(meanOf(Array.from(pr.d[stat], (x) => (x - projV) ** 2)));
+    const curMin = row ? row.min || 0 : 0;
+    let rm = done ? 0 : 0.5 * projMin * f + 0.5 * Math.max(0, projMin - curMin); // half "his share of the time left", half "his usual minutes minus what he's played"
+    rm = Math.max(0, Math.min(rm, 48 * f + (g.period > 4 ? 5 * f : 0)));
+    const rate = projMin > 0 ? projV / projMin : 0, share = projMin > 0 ? Math.min(1, rm / projMin) : 0;
+    const remMu = rate * rm, remSd = sdV * Math.sqrt(share);
+    const p = line == null ? null : done ? (cur > line ? 1 : 0) : pFinishOver(cur, remMu, Math.max(remSd, share > 0 ? 0.35 : 0), Math.floor(line) + 0.5 - (Number.isInteger(line) ? 0.5 : 0));
+    return { cur, done, p, pace: cur + remMu, proj: projV, min: curMin };
+  }
+  /* Live chance that a parlay leg wins. */
+  function liveLeg(l, g, P) {
+    const f = liveLeft(g) / 2880, fin = g.state === "post", m = g.hs - g.as, t = g.hs + g.as;
+    const side = (b) => (l.side === "u" ? 1 - b : b);
+    if (l.type === "prop") {
+      const lp = livePlayer(g, P, l.id, l.stat, l.stat === "dd" || l.stat === "td" ? 0.5 : l.line);
+      if (lp.cur == null) return { p: null, now: "–" };
+      const now = l.stat === "dd" || l.stat === "td" ? (lp.cur ? "yes" : "not yet") : `${lp.cur}` + (lp.pace != null && !lp.done ? ` · on pace ${lp.pace.toFixed(1)}` : "");
+      return { p: lp.p == null ? null : side(lp.p), now, done: lp.done };
+    }
+    if (fin) {
+      let w;
+      if (l.type === "ml") w = (l.side === "home" ? m : -m) > 0;
+      else if (l.type === "spread") w = (l.side === "home" ? m : -m) + l.line > 0;
+      else if (l.type === "total") w = l.side === "o" ? t > l.line : t < l.line;
+      else if (l.type === "ttotal") { const s = l.team === "home" ? g.hs : g.as; w = l.side === "o" ? s > l.line : s < l.line; }
+      else if (l.type === "h1total") w = null;
+      return { p: w == null ? null : w ? 1 : 0, now: `final ${g.as}-${g.hs}`, done: true };
+    }
+    if (!P) return { p: null, now: g.state === "pre" ? "not started" : `${g.as}-${g.hs}` };
+    const now = g.state === "pre" ? "not started" : `${g.away} ${g.as}-${g.hs} ${g.home}`, rf = Math.sqrt(Math.max(f, 1e-6)) * LIVE_SD;
+    let p = null;
+    if (l.type === "ml") { const ph = liveWin(g, P); p = l.side === "home" ? ph : 1 - ph; }
+    else if (l.type === "spread") { const mm = l.side === "home" ? m + P.muM * f : -(m + P.muM * f); p = Phi((mm + l.line) / (P.sdM * rf)); }
+    else if (l.type === "total") p = side(pFinishOver(t, P.muT * f, P.sdT * rf, l.line));
+    else if (l.type === "ttotal") { const home = l.team === "home"; p = side(pFinishOver(home ? g.hs : g.as, (home ? P.muH : P.muA) * f, (home ? P.sdH : P.sdA) * rf, l.line)); }
+    else if (l.type === "h1total") {
+      if (g.period > 2 || (g.half)) return { p: null, now: `half done: ${t} pts`, done: true, settled: side(t > l.line ? 1 : 0) };
+      const f1 = Math.max(0, liveLeft(g) - 1440) / 1440;
+      p = side(pFinishOver(t, P.muH1 * f1, P.sdH1 * Math.sqrt(f1) * LIVE_SD, l.line));
+    }
+    return { p, now };
+  }
+  function liveTracked(g) {
+    const k = liveKey(g);
+    if ((sgpByGame[k] || []).length) return true;
+    for (const id of favs) if (players[id] && (players[id].team === g.away || players[id].team === g.home)) return true;
+    return !!(slate && slate.date === live.day && todayPlaysLive().some((pl) => liveKey(pl.x.g) === k));
+  }
+  const chip = (p, done) => {
+    if (p == null) return `<span class="lchip">–</span>`;
+    if (done) return p >= 0.5 ? `<span class="lchip win">✓ HIT</span>` : `<span class="lchip lose">✗ MISSED</span>`;
+    if (p >= 0.995) return `<span class="lchip win">✓ HIT</span>`;
+    if (p <= 0.005) return `<span class="lchip lose">✗ DEAD</span>`;
+    return `<span class="lchip ${p >= 0.6 ? "good" : p <= 0.4 ? "bad" : ""}">${Math.round(p * 100)}%</span>`;
+  };
+  const clockText = (g) => g.state === "pre" ? tipTime(g.start) : g.state === "post" ? (g.period > 4 ? `Final/${g.period > 5 ? g.period - 4 : ""}OT` : "Final") : g.half ? "Halftime" : `${g.period > 4 ? (g.period > 5 ? g.period - 4 : "") + "OT" : "Q" + g.period} ${g.clock}`;
+
+  function renderLive() {
+    if (activeTab() !== "live" || !model) return;
+    const gs = live.games;
+    $("liveInfo").innerHTML = live.err ? `<span class="bad">${live.err}</span>` : live.at ? `updated ${live.at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" })} · refreshes on its own every 20 s while games are on` : "loading scoreboard…";
+    if (!gs.length) { $("liveGames").innerHTML = live.at ? `<p class="dim">No NBA games today.</p>` : ""; $("liveBets").innerHTML = $("livePlays").innerHTML = $("liveFavs").innerHTML = ""; return; }
+    const byKey = {}; for (const g of gs) byKey[liveKey(g)] = g;
+    const waiting = !slate || slate.date !== live.day || !slate.games.length;
+    // ---- your bets ----
+    const keys = Object.keys(sgpByGame).filter((k) => sgpByGame[k].length && byKey[k]);
+    let bets = "";
+    if (keys.length) {
+      let all = 1, known = true, dead = false, nL = 0;
+      bets = keys.map((k) => {
+        const g = byKey[k], P = liveRes(g);
+        return `<div class="slipgame"><div class="gh"><span>${g.away} @ ${g.home}</span><span class="dim">${clockText(g)}</span></div>` + sgpByGame[k].map((l) => {
+          const r = liveLeg(l, g, P), p = r.settled != null ? r.settled : r.p; nL++;
+          if (p == null) known = false; else { all *= p; if (p <= 0.005) dead = true; }
+          return `<div class="leg"><span>${legText(l, k)}</span><span class="dim">${r.now}</span>${chip(p, r.done || r.settled != null)}</div>`;
+        }).join("") + "</div>";
+      }).join("");
+      const head = dead ? `<b class="bad">Parlay is dead</b> — a leg already lost.` : known ? `All ${nL} legs hitting right now: <b>${Math.round(all * 100)}%</b> <span class="dim">(legs treated as independent once games are under way)</span>` : `<span class="dim">Live chances show once each game has started and been simulated.</span>`;
+      bets = `<h3 class="sec">Your parlay slip <span class="dim">live</span></h3><div class="card lslip"><div class="lhead">${head}</div>${bets}</div>`;
+    } else if (Object.values(sgpByGame).some((l) => l.length)) bets = `<h3 class="sec">Your parlay slip</h3><p class="dim">None of the games on your slip are on today's scoreboard.</p>`;
+    $("liveBets").innerHTML = bets;
+    // ---- the model's plays and your favorites, live ----
+    let plays = "";
+    if (!waiting) {
+      const list = todayPlaysLive();
+      if (list.length) plays = `<h3 class="sec">Model's favorite plays <span class="dim">how they're doing</span></h3><div class="ltable"><table><tr><th>Player</th><th>Play</th><th>Now</th><th>On pace</th><th>Chance</th></tr>` + list.map((pl) => {
+        const g = byKey[liveKey(pl.x.g)]; if (!g) return "";
+        const lp = livePlayer(g, liveRes(g), pl.p.id, pl.k, pl.line), p = lp.p == null ? null : pl.side === "u" ? 1 - lp.p : lp.p;
+        return `<tr><td><span class="pl" data-pid="${pl.p.id}" data-stat="${pl.k}" data-key="${liveKey(g)}">${pl.p.name}</span> <span class="dim">${pl.p.team} · ${clockText(g)}</span></td><td>${pl.side === "o" ? "Over" : "Under"} ${pl.line} ${STAT_LBL[pl.k]}</td><td>${lp.cur == null ? "–" : lp.cur}${lp.min ? ` <span class="dim">in ${lp.min} min</span>` : ""}</td><td>${lp.pace != null && !lp.done && g.state !== "pre" ? lp.pace.toFixed(1) : "–"}</td><td>${g.state === "pre" ? `<span class="dim">pre-game ${Math.round(pl.pr * 100)}%</span>` : chip(p, lp.done)}</td></tr>`;
+      }).join("") + "</table></div>";
+    }
+    $("livePlays").innerHTML = plays;
+    const fl = [...favs].filter((id) => players[id] && gs.some((g) => g.away === players[id].team || g.home === players[id].team));
+    $("liveFavs").innerHTML = fl.length ? `<h3 class="sec">Your favorites</h3><div class="ltable"><table><tr><th>Player</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM</th><th>PRA</th></tr>` + fl.map((id) => {
+      const g = gs.find((x) => x.away === players[id].team || x.home === players[id].team), P = liveRes(g), bx = live.box[g.id], row = bx && bx.p[id];
+      const cell = (k) => { const lp = livePlayer(g, P, id, k, null), pj = P && P.res.players[id] ? meanOf(P.res.players[id].d[k]) : null; return `<td>${row ? liveStat(row, k) : "–"}${pj != null ? ` <span class="dim">/ ${pj.toFixed(1)}</span>` : ""}</td>`; };
+      return `<tr><td><span class="pl" data-pid="${id}" data-key="${liveKey(g)}">${players[id].name}</span> <span class="dim">${clockText(g)}</span></td><td>${row ? row.min : "–"}</td>${["pts", "reb", "ast", "fg3m", "pra"].map(cell).join("")}</tr>`;
+    }).join("") + `</table></div><p class="note">Now / model's projection for the whole game.</p>` : "";
+    // ---- games ----
+    const ord = { in: 0, pre: 1, post: 2 };
+    const shown = gs.slice().sort((a, b) => ord[a.state] - ord[b.state] || new Date(a.start) - new Date(b.start));
+    $("liveGames").innerHTML = (waiting && gs.some((g) => g.state !== "post") ? `<p class="dim">Simulating today's games for the live win chances… (${$("todayProg").style.width || "0%"})</p>` : "") + shown.map((g) => {
+      const P = liveRes(g), ph = liveWin(g, P), A = g.away, H = g.home;
+      if (ph != null && g.state === "in") { const h = live.hist[g.id] || (live.hist[g.id] = []), el = 2880 - liveLeft(g) + (g.period > 4 ? (g.period - 4) * 300 : 0); if (!h.length || h[h.length - 1][0] !== el) h.push([el, ph]); }
+      const pre = P ? `Model before tip: ${P.muM >= 0 ? H : A} by ${Math.abs(P.muM).toFixed(1)}, total ${P.muT.toFixed(0)}` : g.state === "post" ? "" : `<span class="dim">no simulation for this game</span>`;
+      const lead = ph == null ? "" : ph >= 0.5 ? [H, ph] : [A, 1 - ph];
+      const wpTxt = ph == null ? "" : g.state === "post" ? `<b style="color:${col(lead[0])}">${lead[0]}</b> won` : `<b style="color:${col(lead[0])}">${lead[0]}</b> ${Math.round(lead[1] * 100) >= 100 ? ">99" : Math.round(lead[1] * 100)}% to win`;
+      const bar = ph == null ? "" : `<div class="bar"><i style="width:${((1 - ph) * 100).toFixed(1)}%;background:${col(A)}"></i><i style="width:${(ph * 100).toFixed(1)}%;background:${col(H)}"></i></div>`;
+      const pace = P && g.state === "in" && liveLeft(g) < 2880 ? ` · total on pace ${(g.as + g.hs + P.muT * liveLeft(g) / 2880).toFixed(0)}` : "";
+      return `<div class="gcard lgame ${g.state} ${live.open[g.id] ? "wide" : ""}"><div class="top"><span class="teams"><span style="color:${col(A)}">${A}</span> ${g.state === "pre" ? "" : `<b>${g.as}</b>`} <span class="dim">@</span> ${g.state === "pre" ? "" : `<b>${g.hs}</b>`} <span style="color:${col(H)}">${H}</span></span><span class="when ${g.state === "in" ? "onair" : ""}">${g.state === "in" ? "● " : ""}${clockText(g)}</span></div>
+        <div class="verdict">${wpTxt}${pace}</div>${bar}${sparkWP(g, P)}<div class="out">${pre}</div>
+        ${g.state === "pre" ? "" : `<div class="acts"><button data-lbox="${g.id}">${live.open[g.id] ? "Hide box score" : "Box score vs. projections"}</button></div>`}
+        ${live.open[g.id] ? liveBox(g, P) : ""}</div>`;
+    }).join("");
+    $("liveGames").querySelectorAll("button[data-lbox]").forEach((b) => (b.onclick = () => {
+      const id = b.dataset.lbox; live.open[id] = !live.open[id];
+      if (live.open[id] && !live.box[id]) { b.textContent = "Loading…"; live.busy = false; liveFetch(); } else renderLive();
+    }));
+    document.querySelectorAll("#tab-live .pl[data-pid]").forEach((s) => (s.onclick = () => openPlayer(s.dataset.pid, s.dataset.stat || "pts", s.dataset.key)));
+  }
+  function todayPlaysLive() { // the Today page's picks, computed as before tip-off (works once the games have started too)
+    try { return todayPlays(); } catch (e) { return []; }
+  }
+  function sparkWP(g, P) {
+    const h = live.hist[g.id];
+    if (!P || !h || !h.length) return "";
+    const W = 300, Hh = 34, len = Math.max(2880, h[h.length - 1][0]), X = (e) => (e / len) * W, Y = (p) => 2 + (1 - p) * (Hh - 4);
+    const p0 = Phi(P.muM / P.sdM);
+    let pts = `0,${Y(p0).toFixed(1)}`; for (const [e, p] of h) pts += ` ${X(e).toFixed(1)},${Y(p).toFixed(1)}`;
+    return `<svg class="lspark" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none"><line x1="0" x2="${W}" y1="${Y(0.5)}" y2="${Y(0.5)}" stroke="#2a3a4c"/>${[720, 1440, 2160].map((q) => `<line x1="${X(q)}" x2="${X(q)}" y1="0" y2="${Hh}" stroke="#16212d"/>`).join("")}<polyline points="${pts}" fill="none" stroke="#e8eef5" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg><div class="lsparkl dim"><span>${g.away} on top</span><span>since you opened this page</span><span>${g.home} below</span></div>`;
+  }
+  function liveBox(g, P) {
+    const bx = live.box[g.id];
+    if (!bx) return `<p class="dim">Loading box score…</p>`;
+    return `<div class="lboxes">` + [g.away, g.home].map((t) => {
+      const ids = Object.keys(bx.p).filter((id) => bx.p[id].team === t);
+      const extra = P ? Object.keys(P.res.players).filter((id) => P.res.players[id].team === t && !bx.p[id]) : [];
+      const rows = ids.concat(extra).map((id) => {
+        const row = bx.p[id], pr = P && P.res.players[id];
+        const nm = (players[id] && players[id].name) || (pr && pr.name) || id;
+        if (row && row.dnp) return pr ? `<tr class="dnp"><td>${nm}</td><td colspan="5" class="dim">did not play (model had ${meanOf(pr.d.min).toFixed(0)} min)</td></tr>` : "";
+        const c = (k) => { const v = row ? liveStat(row, k) : 0, pj = pr ? meanOf(pr.d[k]) : null; return `<td>${v}${pj != null ? `<span class="dim"> / ${pj.toFixed(1)}</span>` : ""}</td>`; };
+        const lp = pr ? livePlayer(g, P, id, "pts", null) : null;
+        return `<tr><td><span class="pl" data-pid="${id}" data-key="${liveKey(g)}">${nm}</span>${row && row.pf >= 5 ? ` <span class="bad" title="fouls">${row.pf} PF</span>` : ""}</td><td>${row ? row.min : 0}${pr ? `<span class="dim"> / ${meanOf(pr.d.min).toFixed(0)}</span>` : ""}</td>${c("pts")}${c("reb")}${c("ast")}<td>${lp && lp.pace != null && !lp.done ? lp.pace.toFixed(1) : "–"}</td></tr>`;
+      }).join("");
+      return `<div class="lbox"><div class="lboxh" style="color:${col(t)}">${t}</div><table><tr><th></th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th title="points he's on pace for: what he has plus his projected rate over the minutes he likely has left">PTS pace</th></tr>${rows}</table></div>`;
+    }).join("") + `</div><p class="note">Actual / model projection. Pace = what he has plus the model's scoring rate for the minutes he likely has left.</p>`;
   }
 })();
