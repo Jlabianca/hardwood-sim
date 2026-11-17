@@ -669,7 +669,8 @@ def main():
         "var_use": 0.25, "var_eff": 0.35, "var_reb": 0.7, "var_ast": 0.7,
         # stars keep more of their shots in crowded lineups (chance share ~ usage^1.2); fixes stars running
         # ~1.6 pts low and role players high on the 2025-26 backtest
-        "use_gamma": 1.2,  # non-shooting fouls per possession (foul-outs only)
+        "use_gamma": 1.2,
+        "rubber": 0.08,  # leads drift back toward the expected margin: game outcomes as tight around the line as real ones
         "home_edge": 0.035,
         "home_margin": round(float(home_margin), 2),
         "rest": rest,

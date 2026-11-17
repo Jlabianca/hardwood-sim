@@ -32,6 +32,7 @@ for (let k = 0; k < dates.length; k++) {
   if (process.env.VAR_AST) model.league.var_ast = +process.env.VAR_AST;
   if (process.env.USE_GAMMA) model.league.use_gamma = +process.env.USE_GAMMA;
   if (process.env.MIN_BOOST) model.league.min_boost = +process.env.MIN_BOOST;
+  if (process.env.RUBBER) model.league.rubber = +process.env.RUBBER;
   const games = actual.filter((g) => g.date >= d0 && g.date < d1 && model.teams[g.home] && model.teams[g.away]);
   for (const g of games) {
     const ids = [...model.teams[g.home].players, ...model.teams[g.away].players].map((p) => p.id);

@@ -279,3 +279,20 @@ body[data-tab="live"] .picker { display: none; }
 .lgame.wide { grid-column: 1 / -1; }
 .lgame.wide .lboxes { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 860px) { .lgame.wide .lboxes { grid-template-columns: 1fr; } }
+
+/* edges, bets, season */
+table.edges td { vertical-align: top; }
+.betpop { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20; width: min(560px, calc(100vw - 24px)); }
+.betpop .card { box-shadow: 0 8px 30px #000a; border-color: var(--accent); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.betpop .card > b, .betpop .card > .dim { flex-basis: 100%; }
+.betpop input { width: 90px; }
+.filebtn { position: relative; overflow: hidden; display: inline-block; padding: 5px 10px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.season table td.num, .season table th.num { text-align: right; }
+.sbar { display: inline-block; height: 8px; border-radius: 4px; background: var(--good); vertical-align: middle; margin-right: 6px; opacity: .8; }
+.sbar.pi { background: var(--accent); }
+.seedgrid td { font: 11px var(--mono); text-align: center; padding: 3px 2px; }
+.season tr.cutline td { border-bottom: 2px solid #45576b; }
+th.sortable { cursor: pointer; }
+th.sortable:hover { color: var(--accent); }
+body[data-tab="bets"] .picker, body[data-tab="season"] .picker { display: none; }

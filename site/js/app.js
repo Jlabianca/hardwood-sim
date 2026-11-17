@@ -53,6 +53,7 @@
     initPicker();
     initTabs();
     initControls();
+    initBets();
     if (basis !== "season" && basis !== "blend") basis = model.default_basis || "season";
     $("basisSel").value = basis;
     $("basisSel").onchange = () => {
@@ -177,6 +178,9 @@
       if (t.dataset.tab === "dvp") renderDvp();
       if (t.dataset.tab === "track") renderTracker();
       if (t.dataset.tab === "live") { startLive(); renderLive(); } else stopLive();
+      if (t.dataset.tab === "edges") renderEdges();
+      if (t.dataset.tab === "bets") renderBets();
+      if (t.dataset.tab === "season") renderSeason();
       if ((t.dataset.tab === "slate" || t.dataset.tab === "today") && (slateStale || !slate || slate.date !== $("dateSel").value)) runSlate();
       else if (t.dataset.tab === "today") renderToday();
     }));
@@ -1570,11 +1574,12 @@
         if (meanOf(p.d.min) < 20) continue;
         let best = null;
         for (const k of PLAY_STATS) {
-          const key = p.id + "|" + k, user = lines[key] != null;
-          const line = user ? lines[key] : standinLine(p.id, k, x.g.date);
-          if (line == null || line < 1.5 || (!user && meanOf(p.d[k]) < PLAY_MIN[k])) continue;
+          const lf = lineFor(p.id, k, x.g.date);
+          if (!lf) continue;
+          const line = lf.line, user = lf.src !== "avg";
+          if (line < 1.5 || (!user && meanOf(p.d[k]) < PLAY_MIN[k])) continue;
           const o = pOver(p.d[k], line), u = pUnder(p.d[k], line), pr = Math.max(o, u);
-          if (!best || pr > best.pr) best = { x, p, k, line, user, side: o >= u ? "o" : "u", pr, o, u };
+          if (!best || pr > best.pr) best = { x, p, k, line, user, src: lf.src, book: lf.book, side: o >= u ? "o" : "u", pr, o, u };
         }
         if (best && best.pr >= 0.57) out.push(best);
       }
@@ -1597,7 +1602,7 @@
     const tag = against ? `<div class="against">↯ Goes against his last 10 (${pl.side === "u" ? `${ov10} of ${L10.length} over` : `${L10.length - ov10} of ${L10.length} under`})${basis === "blend" ? " — when that happened in our tracked games, the model was still right about 2 in 3 times" : ""}</div>` : "";
     return `<div class="play"><div class="what"><span class="pl" data-pid="${pl.p.id}" data-stat="${pl.k}" data-key="${key}">${pl.p.name}</span> <span class="dim">${pl.p.team} ${opp}</span></div>
       <div class="what">${pl.side === "o" ? "OVER" : "UNDER"} ${pl.line} ${STAT_LBL[pl.k]}</div>
-      <div class="conf"><span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · ${both(`${pct(pl.pr)} · fair ${american(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`, `hits ${inTen(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`)}${pl.user ? "" : ' <span class="dim">· line = his season average</span>'}${!pl.user && Math.abs(pl.role || 0) >= 6 ? ` <span class="st">· ${pl.role > 0 ? "bigger" : "smaller"} role tonight — books will likely adjust this line</span>` : ""}</div>
+      <div class="conf"><span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · ${both(`${pct(pl.pr)} · fair ${american(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`, `hits ${inTen(pl.pr)} · projection ${meanOf(pl.p.d[pl.k]).toFixed(1)}`)}${pl.src === "avg" ? ' <span class="dim">· line = his season average</span>' : pl.src === "book" ? ` <span class="dim">· sportsbook line (${pl.book.books} book${pl.book.books > 1 ? "s" : ""}), best price ${fmtAm(pl.side === "o" ? pl.book.o : pl.book.u)}</span>` : ' <span class="dim">· your line</span>'}${!pl.user && Math.abs(pl.role || 0) >= 6 ? ` <span class="st">· ${pl.role > 0 ? "bigger" : "smaller"} role tonight — books will likely adjust this line</span>` : ""}</div>
       ${tag}
       ${compact ? "" : `<div class="why">${why}</div>`}
       <div class="acts" style="margin-top:6px"><button class="add" data-tk="${key}" data-tid="${pl.p.id}" data-ts="${pl.k}" data-tside="${pl.side}" data-tl="${pl.line}">+ Parlay</button></div></div>`;
@@ -1616,7 +1621,7 @@
       const key = `${x.g.away}@${x.g.home}`, opp = p.team === x.g.home ? `vs ${x.g.away}` : `@ ${x.g.home}`;
       let best = null;
       for (const k of PLAY_STATS) {
-        const line = lines[id + "|" + k] != null ? lines[id + "|" + k] : standinLine(id, k, date);
+        const lf = lineFor(id, k, date), line = lf && lf.line;
         if (line == null || line < 1.5) continue;
         const o = pOver(p.d[k], line), u = pUnder(p.d[k], line);
         if (!best || Math.max(o, u) > best.pr) best = { k, line, o, u, pr: Math.max(o, u) };
@@ -1699,6 +1704,7 @@
       renderSlate();
       renderToday();
       renderLive();
+      renderEdges();
     };
     const store = (g, opts, res) => { if (slate === run) { run.games.push({ g, opts, res }); if (activeTab() === "today") renderToday(); if (activeTab() === "live") renderLive(); } };
     const next = () => {
@@ -1729,6 +1735,11 @@
   function renderSlateGames() {
     if (!slate) return;
     const head = `<tr><th>Game</th><th>Tip</th><th>Proj score</th><th>Win %</th><th>Fair ML</th><th>Fair spread</th><th title="Sportsbook spread for the home team, e.g. -4.5">Home spread</th><th>Cover</th><th>Proj total</th><th>Market total</th><th>Over / under</th><th>Add to slip</th></tr>`;
+    espnLines(slate.date).then((Ls) => { // fill in the sportsbook spread and total where you haven't typed one
+      let ch = false;
+      for (const x of slate.games) { const L = Ls[`${x.g.away}@${x.g.home}`]; if (!L) continue; if (x.g.home_spread == null && L.spread != null) { x.g.home_spread = L.spread; ch = true; } if (x.g.total == null && L.total != null) { x.g.total = L.total; ch = true; } }
+      if (ch) renderSlateGames();
+    });
     $("slateGames").innerHTML = head + slate.games.map((x, i) => {
       const { g, res: r, opts } = x, n = r.n, A = g.away, H = g.home;
       const margin = Array.from(r.home, (h, j) => h - r.away[j]), total = Array.from(r.home, (h, j) => h + r.away[j]);
@@ -1948,9 +1959,301 @@
     renderRoster();
     newGame(seed);
   }
+  // ---------------- sportsbook lines ----------------
+  const BOOK_NAME = { draftkings: "DraftKings", fanduel: "FanDuel", betmgm: "BetMGM", williamhill_us: "Caesars", espnbet: "ESPN BET", betrivers: "BetRivers", fanatics: "Fanatics" };
+  let bookProps = null; // data/odds.json: { date, props: { id: { stat: [{book, line, o, u}] } } }
+  fetch("data/odds.json", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).then((j) => { bookProps = j; if (slate && slate.done) { renderToday(); renderEdges(); } }).catch(() => null);
+  const decOf = (am) => (am == null ? null : am > 0 ? 1 + am / 100 : 1 + 100 / -am);
+  const fmtAm = (am) => (am == null ? "–" : am > 0 ? "+" + am : String(am));
+  /* One consensus line per player and stat: the line most books hang, with the best over and under price at it. */
+  function bookProp(id, k, date) {
+    if (!bookProps || bookProps.date !== date || !bookProps.props || !bookProps.props[id] || !bookProps.props[id][k]) return null;
+    const rows = bookProps.props[id][k], cnt = {};
+    for (const r of rows) cnt[r.line] = (cnt[r.line] || 0) + 1;
+    const line = +Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a] || Math.abs(a - meanOf(rows.map((r) => r.line))) - Math.abs(b - meanOf(rows.map((r) => r.line))))[0];
+    const at = rows.filter((r) => r.line === line);
+    const best = (s) => at.filter((r) => r[s] != null).sort((a, b) => decOf(b[s]) - decOf(a[s]))[0];
+    const bo = best("o"), bu = best("u");
+    const med = (s) => { const v = at.map((r) => r[s]).filter((x) => x != null).map(decOf).sort((a, b) => a - b); return v.length ? v[v.length >> 1] : null; };
+    const mo = med("o"), mu = med("u");
+    return { line, books: at.length, o: bo && bo.o, oBook: bo && bo.book, u: bu && bu.u, uBook: bu && bu.book, fairO: mo && mu ? (1 / mo) / (1 / mo + 1 / mu) : null };
+  }
+  /* The line to judge a prop against: yours if you typed one, else the sportsbook's, else his season average. */
+  function lineFor(id, k, date) {
+    const key = id + "|" + k;
+    if (lines[key] != null) return { line: lines[key], src: "you" };
+    const b = bookProp(id, k, date);
+    if (b) return { line: b.line, src: "book", book: b };
+    const s = standinLine(id, k, date);
+    return s == null ? null : { line: s, src: "avg" };
+  }
+  // game lines straight from ESPN's scoreboard (their sportsbook partner's line), fetched in the browser
+  const gameLinesCache = {};
+  function espnLines(date) {
+    const c = gameLinesCache[date];
+    if (c && Date.now() - c.at < 5 * 60e3) return c.p;
+    const p = fetch(ESPN + "scoreboard?dates=" + date.replace(/-/g, ""), { cache: "no-store" }).then((r) => r.json()).then((j) => {
+      const out = {};
+      for (const e of j.events || []) {
+        const comp = e.competitions[0], tm = (s) => (comp.competitors.find((x) => x.homeAway === s) || {}).team || {};
+        const A = tm("away").abbreviation, H = tm("home").abbreviation, o = (comp.odds || [])[0];
+        if (!o) continue;
+        const nm = (v) => { if (v == null) return null; const s = String(v).trim().replace(/^[ou]/i, ""); if (/^(even|ev|pk)$/i.test(s)) return /pk/i.test(s) ? 0 : 100; const x = parseFloat(s); return isFinite(x) ? x : null; };
+        const cl = (x) => (x ? x.close || x.current || x.open || {} : {});
+        const L = { provider: (o.provider && o.provider.name) || "ESPN" };
+        if (o.pointSpread && o.pointSpread.home) { L.spread = nm(cl(o.pointSpread.home).line); L.spH = nm(cl(o.pointSpread.home).odds); L.spA = nm(cl(o.pointSpread.away).odds); }
+        if (L.spread == null && o.details) { const m = /^(\w+)\s+([-+]?\d+(\.\d+)?)/.exec(o.details); if (m) L.spread = m[1] === H ? +m[2] : -m[2]; else if (/even|pk/i.test(o.details)) L.spread = 0; }
+        if (o.total && o.total.over) { L.total = nm(cl(o.total.over).line); L.ovP = nm(cl(o.total.over).odds); L.unP = nm(cl(o.total.under).odds); }
+        if (L.total == null && o.overUnder != null) L.total = nm(o.overUnder);
+        if (o.moneyline) { L.mlH = nm(cl(o.moneyline.home).odds); L.mlA = nm(cl(o.moneyline.away).odds); }
+        if (L.mlH == null && o.homeTeamOdds) { L.mlH = nm(o.homeTeamOdds.moneyLine); L.mlA = nm(o.awayTeamOdds && o.awayTeamOdds.moneyLine); }
+        if (L.spread != null) { if (L.spH == null) L.spH = -110; if (L.spA == null) L.spA = -110; }
+        if (L.total != null) { if (L.ovP == null) L.ovP = -110; if (L.unP == null) L.unP = -110; }
+        out[`${A}@${H}`] = L;
+      }
+      return out;
+    }).catch(() => ({}));
+    gameLinesCache[date] = { at: Date.now(), p };
+    return p;
+  }
+
+  // ---------------- edges ----------------
+  let edgeLines = {}, edgeLinesDate = null;
+  /* Every bet with a price on it tonight, with the model's chance, the book's (no-vig) chance and expected value. */
+  function edgeRows() {
+    const out = [], date = slate.date;
+    const add = (key, leg, am, fair, res, src) => {
+      const D = decOf(am); if (!D) return;
+      const e = SGP.evaluate([leg], res).legs[0], lose = 1 - e.p - e.push;
+      out.push({ key, leg, am, src, p: e.p, push: e.push, fair, ev: e.p * (D - 1) - lose, edge: fair != null ? e.p / (1 - e.push || 1) - fair : null });
+    };
+    const twoWay = (a, b) => { const x = decOf(a), y = decOf(b); return x && y ? [(1 / x) / (1 / x + 1 / y), (1 / y) / (1 / x + 1 / y)] : [null, null]; };
+    for (const x of slate.games) {
+      if (x.g.home_score != null) continue;
+      const key = `${x.g.away}@${x.g.home}`, L = edgeLines[key], r = x.res;
+      if (L) {
+        const src = L.provider;
+        if (L.mlH != null && L.mlA != null) { const [fh, fa] = twoWay(L.mlH, L.mlA); add(key, { type: "ml", side: "home" }, L.mlH, fh, r, src); add(key, { type: "ml", side: "away" }, L.mlA, fa, r, src); }
+        if (L.spread != null) { const [fh, fa] = twoWay(L.spH, L.spA); add(key, { type: "spread", side: "home", line: L.spread }, L.spH, fh, r, src); add(key, { type: "spread", side: "away", line: -L.spread }, L.spA, fa, r, src); }
+        if (L.total != null) { const [fo, fu] = twoWay(L.ovP, L.unP); add(key, { type: "total", side: "o", line: L.total }, L.ovP, fo, r, src); add(key, { type: "total", side: "u", line: L.total }, L.unP, fu, r, src); }
+      }
+      for (const p of Object.values(r.players)) {
+        for (const k of Object.keys(STAT_LBL)) {
+          if (!p.d[k] || k === "dd" || k === "td") continue;
+          const b = bookProp(p.id, k, date);
+          if (!b) continue;
+          if (b.o != null) add(key, { type: "prop", id: p.id, stat: k, side: "o", line: b.line }, b.o, b.fairO, r, BOOK_NAME[b.oBook] || b.oBook);
+          if (b.u != null) add(key, { type: "prop", id: p.id, stat: k, side: "u", line: b.line }, b.u, b.fairO == null ? null : 1 - b.fairO, r, BOOK_NAME[b.uBook] || b.uBook);
+        }
+      }
+    }
+    return out.sort((a, b) => b.ev - a.ev);
+  }
+  function renderEdges() {
+    if (activeTab() !== "edges" || !model) return;
+    if (!slate || slateStale || slate.date !== $("dateSel").value) { if (!slate || slate.date !== $("dateSel").value || slateStale) runSlate(); }
+    const date = $("dateSel").value;
+    if (edgeLinesDate !== date) { edgeLinesDate = date; edgeLines = {}; espnLines(date).then((l) => { edgeLines = l; renderEdges(); }); }
+    const nGame = Object.keys(edgeLines).length, nProp = bookProps && bookProps.date === date ? Object.keys(bookProps.props || {}).length : 0;
+    const propNote = nProp ? `prop lines for ${nProp} players (best price across ${Object.values(BOOK_NAME).slice(0, 4).join(", ")} and more${bookProps.fetched ? `, fetched ${new Date(bookProps.fetched).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""})`
+      : bookProps && bookProps.note && /yet/.test(bookProps.note) && date === todayET() ? "player prop lines arrive with the afternoon update (about 4:45pm ET)" : `no player prop lines${bookProps && bookProps.props ? " for this date" : " — see “Setting up prop lines” below"}`;
+    $("edgeInfo").innerHTML = `Game lines from ESPN for ${nGame} game${nGame === 1 ? "" : "s"} · ${propNote}`;
+    if (!slate || slate.date !== date || !slate.done) { $("edgeBody").innerHTML = `<p class="dim">Simulating the games on ${fmtDay(date)}… ${$("todayProg").style.width || ""}</p>`; return; }
+    const kind = $("edgeKind").value, minE = +$("edgeMin").value;
+    let rows = edgeRows().filter((r) => (kind === "all" || (kind === "props") === (r.leg.type === "prop")) && r.ev >= minE);
+    const shown = rows.slice(0, 60);
+    if (!shown.length) { $("edgeBody").innerHTML = `<p class="dim">${nGame || nProp ? "Nothing clears that bar right now." : "No sportsbook lines found for this date yet."}</p>`; return; }
+    $("edgeBody").innerHTML = `<div class="ltable"><table class="edges"><tr><th>Bet</th><th>Price</th><th class="adv">Model</th><th class="adv">Book (no-vig)</th><th>Edge</th><th>Value per $100</th><th></th></tr>` + shown.map((r, i) => {
+      const g = r.key.replace("@", " @ ");
+      const plain = `model ${inTen(r.p)}, the price pays like ${inTen(1 / decOf(r.am))}`;
+      return `<tr><td>${r.leg.type === "prop" ? `<span class="pl" data-pid="${r.leg.id}" data-stat="${r.leg.stat}" data-key="${r.key}">${legText(r.leg, r.key)}</span>` : legText(r.leg, r.key)} <span class="dim">${g}</span></td>
+        <td>${fmtAm(r.am)} <span class="dim">${r.src || ""}</span></td><td class="adv">${pct(r.p)}${r.push >= 0.02 ? ` <span class="dim">push ${pct(r.push)}</span>` : ""}</td><td class="adv">${r.fair == null ? "–" : pct(r.fair)}</td>
+        <td><span class="${r.edge >= 0.03 ? "edge-hi" : r.edge < 0 ? "edge-lo" : ""}">${r.edge == null ? "–" : (r.edge >= 0 ? "+" : "") + (r.edge * 100).toFixed(1) + "%"}</span><span class="simp dim"> ${plain}</span>${r.edge != null && r.edge >= 0.15 ? `<div class="st">⚠ gap this big: check the news first, the book may know something (injury, role change)</div>` : ""}</td>
+        <td><b class="${r.ev > 0 ? "edge-hi" : "edge-lo"}">${r.ev >= 0 ? "+" : "−"}$${Math.abs(r.ev * 100).toFixed(1)}</b></td>
+        <td class="acts"><button class="add" data-i="${i}">+ Parlay</button> <button class="logb" data-i="${i}">Log bet</button></td></tr>`;
+    }).join("") + `</table></div><p class="note">Edge = model chance minus the book's chance once its built-in margin (the vig) is removed. Value per $100 = what a $100 bet at this price wins or loses on average if the model is right. Even good models are wrong a lot on single games: look for edges of several percent, and treat small ones as noise.</p>`;
+    $("edgeBody").querySelectorAll("button.add").forEach((b) => (b.onclick = () => { const r = shown[+b.dataset.i]; addLeg(r.key, r.leg); }));
+    $("edgeBody").querySelectorAll("button.logb").forEach((b) => (b.onclick = () => { const r = shown[+b.dataset.i]; openBetForm([{ key: r.key, leg: r.leg }], r.am, r.p, slate.date); }));
+    $("edgeBody").querySelectorAll(".pl[data-pid]").forEach((s) => (s.onclick = () => openPlayer(s.dataset.pid, s.dataset.stat, s.dataset.key)));
+  }
+
+  // ---------------- bet log ----------------
+  let bets = [];
+  try { bets = JSON.parse(localStorage.getItem("hw_bets") || "[]"); } catch (e) {}
+  const saveBets = () => { try { localStorage.setItem("hw_bets", JSON.stringify(bets)); } catch (e) { toast("Couldn't save: browser storage is full or blocked"); } };
+  function openBetForm(legs, am, modelP, date) {
+    const f = $("betForm");
+    f.innerHTML = `<div class="card betform"><b>Log this bet</b><div class="dim">${legs.map((x) => legText(x.leg, x.key)).join(" + ")}</div>
+      <label>Odds you got <input id="bfOdds" value="${am != null ? fmtAm(Math.round(am)) : ""}" placeholder="-110 or +450" size="8"></label>
+      <label>Stake $ <input id="bfStake" value="${localStorage.getItem("hw_stake") || "10"}" size="6"></label>
+      <button id="bfSave" class="primary">Save to My bets</button> <button id="bfCancel">Cancel</button>
+      ${modelP != null ? `<div class="dim">Model's chance right now: ${pct(modelP)} (fair ${american(modelP)})</div>` : ""}</div>`;
+    f.style.display = "block";
+    f.scrollIntoView({ block: "nearest" });
+    $("bfCancel").onclick = () => { f.style.display = "none"; };
+    $("bfSave").onclick = () => {
+      const D = SGP.toDecimal($("bfOdds").value), stake = parseFloat($("bfStake").value);
+      if (!D || !(stake > 0)) { toast("Enter the odds (like -110 or +450) and a stake"); return; }
+      const amv = D >= 2 ? Math.round((D - 1) * 100) : Math.round(-100 / (D - 1));
+      bets.unshift({ id: Date.now().toString(36), at: new Date().toISOString(), date, legs, odds: amv, stake, modelP });
+      try { localStorage.setItem("hw_stake", String(stake)); } catch (e) {}
+      saveBets(); f.style.display = "none";
+      toast(`Saved to My bets: ${legs.length > 1 ? legs.length + "-leg parlay" : legText(legs[0].leg, legs[0].key)}`);
+      if (activeTab() === "bets") renderBets();
+    };
+  }
+  /* Grade one leg from final scores and box scores: "W", "L", "P" (push), "V" (void: player didn't play) or null. */
+  function gradeLeg(x, date) {
+    const [A, H] = x.key.split("@"), l = x.leg;
+    let g = model.schedule.find((s) => s.date === date && s.away === A && s.home === H && s.home_score != null);
+    let hs, as;
+    if (g) { hs = g.home_score; as = g.away_score; }
+    else { const lg = live.day === date && live.games.find((y) => y.away === A && y.home === H && y.state === "post"); if (!lg) return null; hs = lg.hs; as = lg.as; g = lg; }
+    const cmp = (v, line, over) => (v === line ? "P" : (v > line) === over ? "W" : "L");
+    const m = hs - as, t = hs + as;
+    if (l.type === "ml") return (l.side === "home" ? m : -m) > 0 ? "W" : "L";
+    if (l.type === "spread") return cmp((l.side === "home" ? m : -m) + l.line, 0, true);
+    if (l.type === "total") return cmp(t, l.line, l.side === "o");
+    if (l.type === "ttotal") return cmp(l.team === "home" ? hs : as, l.line, l.side === "o");
+    if (l.type === "h1total") return null;
+    // player prop
+    let row = null;
+    const lr = logs && logs.players && (logs.players[l.id] || []).find((r) => r[0] === date);
+    if (lr) { if (lr[19]) return "V"; row = {}; for (const k in LOG_IX) row[k] = lr[LOG_IX[k]]; }
+    else if (g.id && live.box[g.id] && live.box[g.id].final) { const b = live.box[g.id].p[l.id]; if (!b || b.dnp) return "V"; row = b; }
+    else if (logs && logs.players) {
+      // the game is in the data but he has no line: he didn't play
+      const teamPlayed = g.home_score != null && Object.values(logs.players).some((rs) => rs.some((r) => r[0] === date && (r[20] === A || r[20] === H)));
+      return teamPlayed ? "V" : null;
+    } else return null;
+    const v = liveStat(row, l.stat);
+    if (l.stat === "dd" || l.stat === "td") return (v === 1) === (l.side !== "u") ? "W" : "L";
+    return cmp(v, l.line, l.side === "o");
+  }
+  function gradeBet(b) {
+    if (b.manual) return b.manual;
+    const gs = b.legs.map((x) => gradeLeg(x, b.date));
+    if (gs.includes("L")) return "L";
+    if (gs.includes(null)) return null;
+    const live_ = gs.filter((x) => x !== "P" && x !== "V");
+    if (!live_.length) return gs.includes("V") && !gs.includes("P") ? "V" : "P";
+    return "W";
+  }
+  const profitOf = (b, r) => (r === "W" ? b.stake * (decOf(b.odds) - 1) : r === "L" ? -b.stake : 0);
+  const catOf = (b) => {
+    if (b.legs.length > 1) return b.legs.length === 2 ? "Parlays: 2 legs" : "Parlays: 3+ legs";
+    const l = b.legs[0].leg;
+    if (l.type === "prop") return `Props: ${STAT_LBL[l.stat]}`;
+    return { ml: "Moneyline", spread: "Spread", total: "Game total", ttotal: "Team total", h1total: "1st half total" }[l.type];
+  };
+  function renderBets() {
+    if (activeTab() !== "bets") return;
+    if (!logs) loadLogs().then(renderBets);
+    const graded = bets.map((b) => ({ b, r: gradeBet(b) }));
+    const done = graded.filter((x) => x.r && x.r !== "V");
+    const W = done.filter((x) => x.r === "W").length, Lc = done.filter((x) => x.r === "L").length, Pc = done.filter((x) => x.r === "P").length;
+    const staked = done.reduce((a, x) => a + x.b.stake, 0), prof = done.reduce((a, x) => a + profitOf(x.b, x.r), 0);
+    const withP = done.filter((x) => x.b.modelP != null && x.r !== "P");
+    const expHits = withP.reduce((a, x) => a + x.b.modelP, 0), hits = withP.filter((x) => x.r === "W").length;
+    const money = (v) => `${v < 0 ? "−" : v > 0 ? "+" : ""}$${Math.abs(v).toFixed(2)}`;
+    $("betCards").innerHTML = !bets.length ? "" : [
+      ["Record", `${W}–${Lc}${Pc ? "–" + Pc : ""}`, `${graded.filter((x) => !x.r).length} still open`],
+      ["Profit", `<span class="${prof >= 0 ? "edge-hi" : "edge-lo"}">${money(prof)}</span>`, `on $${staked.toFixed(2)} staked`],
+      ["Return on money bet", staked ? `<span class="${prof >= 0 ? "edge-hi" : "edge-lo"}">${((prof / staked) * 100).toFixed(1)}%</span>` : "–", "profit ÷ total staked"],
+      ["Model's call", withP.length ? `${hits} won / ${expHits.toFixed(1)} expected` : "–", withP.length ? "wins vs. what the model's chances added up to" : "log bets from the site to track this"],
+    ].map(([k, v, s]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+    // breakdown
+    const groups = {};
+    const addG = (name, x) => { const g = (groups[name] = groups[name] || { n: 0, w: 0, l: 0, st: 0, pr: 0 }); g.n++; if (x.r === "W") g.w++; if (x.r === "L") g.l++; g.st += x.b.stake; g.pr += profitOf(x.b, x.r); };
+    for (const x of done) {
+      addG(catOf(x.b), x);
+      if (x.b.legs.length === 1 && x.b.legs[0].leg.side && /^[ou]$/.test(x.b.legs[0].leg.side)) addG(x.b.legs[0].leg.side === "o" ? "All overs" : "All unders", x);
+    }
+    const gk = Object.keys(groups).sort((a, b) => groups[b].n - groups[a].n);
+    $("betBreak").innerHTML = gk.length ? `<h3 class="sec">By type</h3><div class="ltable"><table><tr><th>Type</th><th>Record</th><th>Staked</th><th>Profit</th><th>Return</th></tr>` + gk.map((k) => { const g = groups[k]; return `<tr><td>${k}</td><td>${g.w}–${g.l}${g.n - g.w - g.l ? "–" + (g.n - g.w - g.l) : ""}</td><td>$${g.st.toFixed(2)}</td><td class="${g.pr >= 0 ? "edge-hi" : "edge-lo"}">${money(g.pr)}</td><td>${((g.pr / g.st) * 100).toFixed(1)}%</td></tr>`; }).join("") + `</table></div>` : "";
+    const lbl = { W: `<span class="lchip win">WON</span>`, L: `<span class="lchip lose">LOST</span>`, P: `<span class="lchip">PUSH</span>`, V: `<span class="lchip">VOID</span>` };
+    $("betList").innerHTML = !bets.length ? `<p class="dim">No bets logged yet. Use “Log bet” on the Edges tab, or “Log this bet” under your parlay slip, after you place a bet. Results grade themselves from the box scores.</p>` :
+      `<h3 class="sec">Your bets</h3><div class="ltable"><table><tr><th>Date</th><th>Bet</th><th>Odds</th><th>Stake</th><th class="adv">Model</th><th>Result</th><th>Profit</th><th></th></tr>` + graded.map(({ b, r }) => `<tr><td>${fmtDay(b.date)}</td>
+        <td>${b.legs.map((x) => `${legText(x.leg, x.key)} <span class="dim">${x.key.replace("@", " @ ")}</span>${b.legs.length > 1 ? ` ${((g) => (g ? lbl[g] : ""))(gradeLeg(x, b.date))}` : ""}`).join("<br>")}</td>
+        <td>${fmtAm(b.odds)}</td><td>$${b.stake}</td><td class="adv">${b.modelP != null ? pct(b.modelP) : "–"}</td>
+        <td>${r ? lbl[r] : `<span class="dim">open</span>`}${b.manual ? ` <span class="dim">(set by you)</span>` : ""}</td><td>${r ? money(profitOf(b, r)) : ""}</td>
+        <td class="acts"><select data-set="${b.id}" title="Set the result yourself"><option value="">auto</option>${["W", "L", "P", "V"].map((v) => `<option value="${v}" ${b.manual === v ? "selected" : ""}>${{ W: "won", L: "lost", P: "push", V: "void" }[v]}</option>`).join("")}</select> <button class="x" data-del="${b.id}" title="delete">×</button></td></tr>`).join("") + `</table></div>`;
+    $("betList").querySelectorAll("select[data-set]").forEach((s) => (s.onchange = () => { const b = bets.find((x) => x.id === s.dataset.set); b.manual = s.value || undefined; saveBets(); renderBets(); }));
+    $("betList").querySelectorAll("button[data-del]").forEach((x) => (x.onclick = () => { if (!confirmDel(x)) return; bets = bets.filter((b) => b.id !== x.dataset.del); saveBets(); renderBets(); }));
+  }
+  function confirmDel(btn) { // two clicks to delete, no pop-up
+    if (btn.dataset.armed) return true;
+    btn.dataset.armed = "1"; btn.textContent = "delete?"; setTimeout(() => { delete btn.dataset.armed; btn.textContent = "×"; }, 2500);
+    return false;
+  }
+  function initBets() {
+    $("btnBetExport").onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify(bets, null, 1)], { type: "application/json" }));
+      a.download = `hardwood-bets-${todayET()}.json`; a.click();
+    };
+    $("betImport").onchange = (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      f.text().then((t) => { const arr = JSON.parse(t); const have = new Set(bets.map((b) => b.id)); let n = 0; for (const b of arr) if (b && b.id && b.legs && !have.has(b.id)) { bets.push(b); n++; } bets.sort((a, b) => (a.at < b.at ? 1 : -1)); saveBets(); renderBets(); toast(`Imported ${n} bet${n === 1 ? "" : "s"}`); }).catch(() => toast("That file isn't a bet log export"));
+      e.target.value = "";
+    };
+    $("btnSlipLog").onclick = () => {
+      const keys = Object.keys(sgpByGame).filter((k) => sgpByGame[k].length);
+      if (!keys.length) { toast("Your slip is empty"); return; }
+      const legs = []; for (const k of keys) for (const l of sgpByGame[k]) legs.push({ key: k, leg: JSON.parse(JSON.stringify(l)) });
+      let P = 1; for (const k of keys) { const r = resultFor(k); if (!r) { P = null; break; } P *= SGP.evaluate(sgpByGame[k], r).joint; }
+      const D = SGP.toDecimal($("slipBook").value), am = D ? (D >= 2 ? (D - 1) * 100 : -100 / (D - 1)) : null;
+      const dates = keys.map((k) => { const [a, h] = k.split("@"); const g = model.schedule.find((s) => s.away === a && s.home === h && s.date >= todayET()) || model.schedule.filter((s) => s.away === a && s.home === h).pop(); return g ? g.date : $("dateSel").value; });
+      openBetForm(legs, am, P, dates.sort()[0]);
+    };
+    $("edgeKind").onchange = $("edgeMin").onchange = renderEdges;
+  }
+
+  // ---------------- season outlook ----------------
+  let seasonData = null, seasonSort = "proj_w";
+  function renderSeason() {
+    if (activeTab() !== "season") return;
+    if (!seasonData) {
+      $("seasonBody").innerHTML = `<p class="dim">Loading…</p>`;
+      fetch("data/season.json", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject())).then((j) => { seasonData = j; renderSeason(); })
+        .catch(() => { $("seasonBody").innerHTML = `<p class="dim">The season outlook hasn't been built yet. It appears after the next data update.</p>`; });
+      return;
+    }
+    const S = seasonData, P = (x) => (x >= 0.995 ? ">99%" : x > 0 && x < 0.005 ? "<1%" : Math.round(x * 100) + "%");
+    $("seasonInfo").textContent = `${S.seasons.toLocaleString()} simulated seasons · ${S.games_left} games left · updated ${new Date(S.generated).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+    const games = 82;
+    const cols = [
+      ["Record", (t) => `${t.w}-${t.l}`, null],
+      ["Projected", (t) => `<b>${Math.round(t.proj_w)}-${games - Math.round(t.proj_w)}</b>`, "proj_w"],
+      ["Likely range", (t) => `<span class="dim">${t.w10}–${t.w90} wins</span>`, null, "adv"],
+      ["Strength", (t) => `${t.rating >= 0 ? "+" : ""}${t.rating.toFixed(1)}${Math.abs(t.rating_now - t.rating) >= 1 ? ` <span class="dim" title="with tonight's injury report">(now ${t.rating_now >= 0 ? "+" : ""}${t.rating_now.toFixed(1)})</span>` : ""}`, "rating", "adv"],
+      ["Playoffs", (t) => `<span class="sbar" style="width:${Math.round(t.playoff * 60)}px"></span>${P(t.playoff)}`, "playoff"],
+      ["Top 6 (no play-in)", (t) => P(t.top6), "top6", "adv"],
+      ["Play-in", (t) => P(t.playin), "playin", "adv"],
+      ["#1 seed", (t) => P(t.seed[0]), null, "adv"],
+      ["2nd round", (t) => P(t.r2), "r2", "adv"],
+      ["Conf. finals", (t) => P(t.cf), "cf"],
+      ["Finals", (t) => P(t.finals), "finals"],
+      ["Title", (t) => `<b>${P(t.title)}</b>`, "title"],
+    ];
+    const conf = (c) => {
+      const ts = Object.entries(S.teams).filter(([, t]) => t.conf === c).sort((a, b) => b[1][seasonSort] - a[1][seasonSort] || b[1].proj_w - a[1].proj_w);
+      return `<h3 class="sec">${c}</h3><div class="ltable season"><table><tr><th>#</th><th>Team</th>${cols.map(([h, , k, cl]) => `<th class="${cl || ""} ${k ? "sortable" : ""}" ${k ? `data-sort="${k}"` : ""}>${h}${k === seasonSort ? " ▾" : ""}</th>`).join("")}</tr>` +
+        ts.map(([abbr, t], i) => `<tr class="${i === 5 || i === 9 ? "cutline" : ""}"><td class="dim">${i + 1}</td><td><b style="color:${col(abbr)}">${abbr}</b> <span class="dim">${model.teams[abbr] ? model.teams[abbr].name.replace(/^.* /, "") : ""}</span></td>${cols.map(([, f, , cl]) => `<td class="${cl || ""}">${f(t)}</td>`).join("")}</tr>`).join("") + `</table></div>`;
+    };
+    const seedGrid = (c) => {
+      const ts = Object.entries(S.teams).filter(([, t]) => t.conf === c).sort((a, b) => b[1].proj_w - a[1].proj_w);
+      return `<div class="ltable"><table class="seedgrid"><tr><th>${c}</th>${Array.from({ length: 15 }, (_, i) => `<th>${i + 1}</th>`).join("")}</tr>` + ts.map(([abbr, t]) => `<tr><td style="text-align:left"><b style="color:${col(abbr)}">${abbr}</b></td>${t.seed.map((p) => `<td style="background:rgba(255,138,61,${Math.min(0.85, p * 1.6).toFixed(2)})">${p >= 0.01 ? Math.round(p * 100) : ""}</td>`).join("")}</tr>`).join("") + `</table></div>`;
+    };
+    $("seasonBody").innerHTML = conf("East") + conf("West") +
+      `<details class="adv"><summary>Seeding chances (% of simulations finishing in each spot)</summary>${seedGrid("East")}${seedGrid("West")}</details>` +
+      `<p class="note">Lines under 6th and 10th mark the playoff and play-in cutoffs (sorted by projected wins). How it works: every pair of teams plays ${"many"} neutral-court games in the full simulator to rate each team (Strength = points better than an average team on a neutral floor, using this season blended with last season). Each remaining game is then played out from those ratings plus home court, with tonight's injury report used for the next ${S.inj_days} days and full rosters after that. Each simulated season also lets every team get better or worse by a random amount (trades, injuries, slumps), so far-off odds stay honest. Then the play-in and playoffs are played out (best of seven, home court to the higher seed).</p>`;
+    $("seasonBody").querySelectorAll("th[data-sort]").forEach((th) => (th.onclick = () => { seasonSort = th.dataset.sort; renderSeason(); }));
+  }
+
   // ---------------- live ----------------
   const ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/";
-  const LIVE_SD = 0.82; // the sim's final margins spread about 20% wider than real games: shrink before using them live
+  const LIVE_SD = 1; // the sim's spread of final margins now matches real games
   const live = { day: null, games: [], box: {}, hist: {}, open: {}, timer: null, at: null, err: null, busy: false };
   const BOX_COL = { MIN: "min", PTS: "pts", REB: "reb", AST: "ast", STL: "stl", BLK: "blk", TO: "tov", PF: "pf" };
   function liveLeft(g) { // seconds left in the game (regulation, or this overtime)

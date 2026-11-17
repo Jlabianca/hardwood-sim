@@ -25,6 +25,9 @@
   <nav class="tabs" role="tablist">
     <button class="tab active" data-tab="today" role="tab">Today</button>
     <button class="tab" data-tab="live" role="tab"><span class="livedot">●</span> Live</button>
+    <button class="tab" data-tab="edges" role="tab">Edges</button>
+    <button class="tab" data-tab="bets" role="tab">My bets</button>
+    <button class="tab" data-tab="season" role="tab">Season</button>
     <button class="tab" data-tab="watch" role="tab">Watch a sim</button>
     <button class="tab" data-tab="slate" role="tab">Slate</button>
     <button class="tab" data-tab="proj" role="tab">Projections &amp; props</button>
@@ -57,6 +60,36 @@
     <div class="gcards" id="todayGames"></div>
     <p class="note">Every number comes from simulating each game thousands of times. "Favorite plays" compare the model with each player's season average (or your own line, if you typed one), not with a sportsbook line. The model hasn't been shown to beat the books, so use these as a starting point for research, not as bets.</p>
   </section>
+
+  <!-- EDGES -->
+  <section id="tab-edges" class="pane">
+    <div class="todayhead"><h2>Edges</h2><span class="dim" id="edgeInfo"></span></div>
+    <p class="dim">Every bet the sportsbooks have a price on, ranked by how much the model likes the price. Pick the date above.</p>
+    <div class="controls"><label>Show <select id="edgeKind"><option value="all">everything</option><option value="props">player props</option><option value="games">game lines</option></select></label>
+      <label>Value at least <select id="edgeMin"><option value="0">+$0 per $100</option><option value="0.03">+$3</option><option value="0.06" selected>+$6</option><option value="0.1">+$10</option><option value="-1">show all, even bad prices</option></select></label></div>
+    <div id="edgeBody"></div>
+    <details class="note"><summary>Setting up prop lines</summary>
+      <p>Game lines (moneyline, spread, total) come from ESPN and need no setup. Player prop lines come from The Odds API, which needs a free key: sign up at the-odds-api.com (free plan, 500 credits a month), then in GitHub open the hardwood-sim repo → Settings → Secrets and variables → Actions → New repository secret, name it <code>ODDS_API_KEY</code> and paste the key. The site then fetches points props once a day around 4:45pm ET (about 10 credits a night, inside the free plan). For more markets on a paid plan, add a repository <em>variable</em> <code>ODDS_MARKETS</code> such as <code>player_points,player_rebounds,player_assists,player_threes</code>.</p></details>
+  </section>
+
+  <!-- BETS -->
+  <section id="tab-bets" class="pane">
+    <div class="todayhead"><h2>My bets</h2><span class="dim">saved in this browser · graded automatically from box scores</span></div>
+    <div class="cards" id="betCards"></div>
+    <div id="betBreak"></div>
+    <div id="betList"></div>
+    <div class="controls" style="margin-top:12px"><button id="btnBetExport">Download backup</button> <label class="filebtn">Restore / merge a backup <input type="file" id="betImport" accept=".json,application/json"></label></div>
+    <p class="note">Bets live in this browser only. Download a backup now and then, and restore it to move your log to another phone or computer. Use the result menu to fix anything graded wrong (for example a bet a sportsbook voided).</p>
+  </section>
+
+  <!-- SEASON -->
+  <section id="tab-season" class="pane">
+    <div class="todayhead"><h2>Season outlook</h2><span class="dim" id="seasonInfo"></span></div>
+    <p class="dim">The rest of the regular season played out thousands of times: projected wins, playoff and play-in chances, and seeding.</p>
+    <div id="seasonBody"></div>
+  </section>
+
+  <div id="betForm" class="betpop" style="display:none"></div>
 
   <!-- LIVE -->
   <section id="tab-live" class="pane">
@@ -127,7 +160,7 @@
         <h3 class="sec">Parlay slip <span class="dim">· legs from any games · legs in the same game are priced together (correlation included), separate games are independent and multiply · add legs with the buttons in the tables or on the Projections tab</span></h3>
         <div id="slipBody"></div>
         <div class="cards" id="slipCards"></div>
-        <div class="sgpbook"><label>Book's parlay odds <input id="slipBook" type="text" placeholder="+1200 or 13.0"></label> <span id="slipEv"></span> <button id="btnSlipClear">Clear slip</button></div>
+        <div class="sgpbook"><label>Book's parlay odds <input id="slipBook" type="text" placeholder="+1200 or 13.0"></label> <span id="slipEv"></span> <button id="btnSlipLog" class="primary">Log this bet</button> <button id="btnSlipClear">Clear slip</button></div>
       </div>
       <div class="propbar">
         <h3>All props</h3>

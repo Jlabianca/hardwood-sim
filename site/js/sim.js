@@ -151,7 +151,7 @@
     // per-game minutes noise: coaches' rotations wobble night to night
     for (const t of tm) {
       let s0 = 0, s1 = 0;
-      for (const p of t.ps) { s0 += p.target; p.gt = p.target * Math.exp(0.12 * rng.normal()); s1 += p.gt; }
+      for (const p of t.ps) { s0 += p.target; p.gt = p.target * Math.exp((L.var_min == null ? 0.12 : L.var_min) * rng.normal()); s1 += p.gt; }
       for (const p of t.ps) p.gt *= s0 / s1;
     }
     // per-game form: some nights a player looks for his shot more, some nights it falls more (hot/cold)
@@ -176,6 +176,10 @@
     let q = 1, tleft = 720, lastSub = -1e9, elapsed = 0;
     const ldef = [tm[1].T, tm[0].T]; // defending team's factors, indexed by offense side
     const effBase = L.eff_scale || 0;
+    // Teams well ahead of where they "should" be ease off and teams behind push, so leads drift back toward the
+    // expected margin (real games end closer to the betting line than independent possessions would give).
+    const RB = opts.pilot ? 0 : L.rubber || 0;
+    const expM = RB ? (opts.exp_margin != null ? opts.exp_margin : pilotMargin(model, opts)) : 0;
     const home = neutral ? -1 : 1;
     // rest: points relative to a normal day off, split between the team's offense and its defense
     const R = L.rest || {}, rest = opts.rest || {};
@@ -373,7 +377,7 @@
           zone = rng() < clamp(rs, 0.05, 0.97) ? "rim" : "mid";
         }
         let base = zone === "three" ? p.p3 : zone === "rim" ? p.prim : p.pmid;
-        let lg = logit(clamp(base, 0.05, 0.95)) + effBase + 4.0 * (D.d_efg || 0) + loadAdj + restAdj[o] + p.ge;
+        let lg = logit(clamp(base, 0.05, 0.95)) + effBase + 4.0 * (D.d_efg || 0) + loadAdj + restAdj[o] + p.ge - RB * Math.max(-30, Math.min(30, score[o] - score[d] - (o === 1 ? 1 : -1) * expM * Math.min(1, elapsed / 2880))) / 10;
         // lineup defense: the five defenders vs. the team's usual defense, plus the man guarding the shooter
         let dSum = 0; for (const j of on[d]) dSum += tm[d].ps[j].d;
         const guard = mu[o][actor];
@@ -480,8 +484,16 @@
 
   // ---------------- many games ----------------
   const AGG_KEYS = ["min", "pts", "reb", "ast", "fg3m", "stl", "blk", "tov", "oreb", "fga", "fta"];
+  // expected home margin from a quick batch of games without the pull-back
+  function pilotMargin(model, opts) {
+    const n = 60, base = opts.seed == null ? 7 : opts.seed;
+    let s = 0;
+    for (let g = 0; g < n; g++) { const r = simulateGame(model, Object.assign({}, opts, { seed: (base * 31 + g * 104729) >>> 0, log: false, pilot: true })); s += r.score.home - r.score.away; }
+    return s / n;
+  }
   function simulateMany(model, opts, n, progress) {
     const base = opts.seed == null ? 1 : opts.seed;
+    if (model.league.rubber && opts.exp_margin == null) opts = Object.assign({}, opts, { exp_margin: pilotMargin(model, opts) });
     const agg = { n, away: new Int16Array(n), home: new Int16Array(n), away1h: new Int16Array(n), home1h: new Int16Array(n), ot: 0, wins: { away: 0, home: 0 }, players: {} };
     for (let g = 0; g < n; g++) {
       const r = simulateGame(model, Object.assign({}, opts, { seed: (base * 1000003 + g * 7919) >>> 0, log: false }));

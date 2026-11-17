@@ -5,6 +5,11 @@ on:
     - cron: "23 13 * * *"   # daily, ~9am ET: picks up last night's box scores and the morning injury report
     - cron: "41 21 * * *"   # ~5:40pm ET: refreshed injury report before tip-off
   workflow_dispatch:         # "Run workflow" button in the Actions tab
+    inputs:
+      refresh_odds:
+        description: "Fetch sportsbook prop lines again now (uses Odds API credits)"
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -36,6 +41,15 @@ jobs:
         run: python scripts/build_data.py --refresh
       - name: Calibrate scoring, pace and rebounds
         run: node scripts/calibrate.js site/data/model.json
+      - name: "Season outlook: play out the rest of the season 10,000 times"
+        run: node scripts/season.js site/data/model.json site/data/season.json
+      - name: Sportsbook prop lines (needs the ODDS_API_KEY secret; skipped without it)
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          ODDS_MARKETS: ${{ vars.ODDS_MARKETS }}
+          ODDS_FETCH: ${{ github.event_name == 'push' && '0' || '1' }}
+          ODDS_FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.refresh_odds && '1' || '0' }}
+        run: python scripts/fetch_odds.py
       - name: "Tracker: save today's projections and grade finished days"
         run: |
           node scripts/tracker.js project
@@ -47,7 +61,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add tracker/
           if ! git diff --cached --quiet; then
-            git commit -m "tracker: save projections $(TZ=America/New_York date +%F) [skip ci]"
+            git commit -m "tracker: save projections/odds $(TZ=America/New_York date +%F) [skip ci]"
             # the rebuilt site/data files are uncommitted here, so set them aside while pulling
             if git pull --rebase --autostash origin main && git push origin HEAD:main; then
               echo "::notice title=tracker::saved projections committed"

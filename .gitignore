@@ -2,3 +2,5 @@ data_raw/
 backtest/
 __pycache__/
 .DS_Store
+site/data/odds.json
+site/data/season.json
