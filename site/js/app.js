@@ -54,6 +54,7 @@
     initTabs();
     initControls();
     initBets();
+    initDock();
     if (basis !== "season" && basis !== "blend") basis = model.default_basis || "season";
     $("basisSel").value = basis;
     $("basisSel").onchange = () => {
@@ -820,6 +821,7 @@
     if (i >= 0) L[i] = leg; else L.push(leg);
     if (key === sgpKey()) renderSgp();
     renderSlip();
+    pulseDock();
     toast(`Added to ${key.replace("@", " @ ")}: ${legText(leg, key)}`);
   }
   function legText(l, key) {
@@ -1123,7 +1125,7 @@
     }
   }
   document.addEventListener("click", (e) => {
-    const el = e.target.closest(".pl");
+    const el = e.target.closest("button") ? null : e.target.closest(".pl[data-pid]");
     if (el && model) { e.preventDefault(); openPlayer(el.dataset.pid, el.dataset.stat, el.dataset.key); return; }
     if (e.target.id === "pcard") closeCard();
   });
@@ -1340,6 +1342,9 @@
     saveSlip();
     if (!$("slipBody")) return;
     const keys = Object.keys(sgpByGame).filter((k) => sgpByGame[k].length);
+    const nAll = keys.reduce((a, k) => a + sgpByGame[k].length, 0);
+    $("slipDock").classList.toggle("has", nAll > 0);
+    $("dockSum").textContent = nAll ? `${nAll} leg${nAll > 1 ? "s" : ""}` : "empty";
     if (!keys.length) {
       $("slipBody").innerHTML = `<p class="dim">Empty. Use the ML / spread / O / U buttons on the games above, the O / U buttons in the props table, or the same-game builder on the Projections tab.</p>`;
       $("slipCards").innerHTML = ""; $("slipEv").textContent = "";
@@ -1369,8 +1374,10 @@
       renderSlip();
       if (projResult && b.dataset.k === sgpKey()) renderSgp();
     }));
-    if (missing) { $("slipCards").innerHTML = ""; $("slipEv").innerHTML = `<span class="dim">Price shows once every game on the slip has been simulated.</span>`; return; }
+    if (missing) { $("dockSum").textContent = `${nLegs} legs · not priced yet`;
+      $("slipCards").innerHTML = ""; $("slipEv").innerHTML = `<span class="dim">Price shows once every game on the slip has been simulated.</span>`; return; }
     const se = P * Math.sqrt(rel2), lift = Pind > 0 ? P / Pind : null;
+    $("dockSum").innerHTML = `${nLegs} leg${nLegs > 1 ? "s" : ""} · <b>${pct(P)}</b> · ${american(P)}`;
     const cards = [
       ["All legs hit", both(pct(P), oneIn(P)), `±${(se * 100).toFixed(1)}% · ${nLegs} legs, ${keys.length} game${keys.length > 1 ? "s" : ""}`],
       ["Fair parlay odds", american(P), P > 0 ? `decimal ${(1 / P).toFixed(2)}` : ""],
@@ -1959,6 +1966,24 @@
     renderRoster();
     newGame(seed);
   }
+  // ---------------- parlay box (on every tab) ----------------
+  function initDock() {
+    let open = false;
+    try { open = localStorage.getItem("hw_dock") === "open"; } catch (e) {}
+    const set = (o) => {
+      open = o;
+      $("slipDock").classList.toggle("open", o); document.body.classList.toggle("dockopen", o);
+      $("dockHead").setAttribute("aria-expanded", String(o));
+      try { localStorage.setItem("hw_dock", o ? "open" : "closed"); } catch (e) {}
+    };
+    $("dockHead").onclick = () => set(!open);
+    set(open);
+    renderSlip();
+  }
+  function pulseDock() {
+    const d = $("slipDock"); d.classList.remove("pulse"); void d.offsetWidth; d.classList.add("pulse");
+  }
+
   // ---------------- sportsbook lines ----------------
   const BOOK_NAME = { draftkings: "DraftKings", fanduel: "FanDuel", betmgm: "BetMGM", williamhill_us: "Caesars", espnbet: "ESPN BET", betrivers: "BetRivers", fanatics: "Fanatics" };
   let bookProps = null; // data/odds.json: { date, props: { id: { stat: [{book, line, o, u}] } } }
