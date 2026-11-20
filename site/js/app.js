@@ -1967,6 +1967,27 @@
     newGame(seed);
   }
   // ---------------- parlay box (on every tab) ----------------
+  /* The slip as plain text, one leg per line, worded the way bet-slip bots and sportsbooks read it. */
+  function slipText() {
+    const nick = (t) => (model.teams[t] ? model.teams[t].name.replace(/^.* /, "") : t);
+    const out = [];
+    for (const key of Object.keys(sgpByGame)) {
+      const [a, h] = key.split("@");
+      for (const l of sgpByGame[key]) {
+        const tm = l.side === "home" ? h : a, ou = (s) => (s === "o" ? "over" : "under");
+        if (l.type === "prop") {
+          const nm_ = players[l.id] ? players[l.id].name : "?";
+          out.push(l.stat === "dd" || l.stat === "td" ? `${nm_} ${l.stat === "dd" ? "double-double" : "triple-double"}${l.side === "u" ? ": No" : ""}` : `${nm_} ${ou(l.side)} ${l.line} ${STAT_LBL[l.stat]}`);
+        } else if (l.type === "ml") out.push(`${nick(tm)} ML`);
+        else if (l.type === "spread") out.push(`${nick(tm)} ${fmtLine(l.line)}`);
+        else if (l.type === "total") out.push(`${nick(a)} vs ${nick(h)} ${ou(l.side)} ${l.line}`);
+        else if (l.type === "ttotal") out.push(`${nick(l.team === "home" ? h : a)} team total ${ou(l.side)} ${l.line}`);
+        else if (l.type === "h1total") out.push(`${nick(a)} vs ${nick(h)} 1st half ${ou(l.side)} ${l.line}`);
+      }
+    }
+    return out.join("\n");
+  }
+
   function initDock() {
     let open = false;
     try { open = localStorage.getItem("hw_dock") === "open"; } catch (e) {}
@@ -1977,6 +1998,14 @@
       try { localStorage.setItem("hw_dock", o ? "open" : "closed"); } catch (e) {}
     };
     $("dockHead").onclick = () => set(!open);
+    $("btnSlipCopy").onclick = () => {
+      const t = slipText(); if (!t) { toast("Your slip is empty"); return; }
+      (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast("Slip copied: paste it to Playbook in Discord, or into any post"), () => { prompt("Copy your slip:", t); });
+    };
+    $("btnSlipPlaybook").onclick = () => {
+      const t = slipText(); if (!t) { toast("Your slip is empty"); return; }
+      window.open("https://x.com/intent/post?text=" + encodeURIComponent("@Playbook\n" + t), "_blank", "noopener");
+    };
     set(open);
     renderSlip();
   }
