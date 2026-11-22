@@ -90,7 +90,8 @@
       newGame(seed);
       if (activeTab() === "proj") runProjections();
       if (activeTab() === "slate" || activeTab() === "today") runSlate();
-      toast(basis === "season" ? "Model now uses this season's stats only" : "Model now blends this season with last season");
+      if (activeTab() === "edges") renderEdges();
+      toast(basis === "season" ? "Model now uses this season's stats only (Edges stays on blended)" : "Model now blends this season with last season");
     };
     applyMode();
     document.body.dataset.tab = "today";
@@ -134,7 +135,7 @@
     const dates = [...new Set(model.schedule.map((g) => g.date))];
     const def = defaultDate(), t = todayET();
     $("dateSel").innerHTML = dates.map((d) => `<option value="${d}" ${d === def ? "selected" : ""}>${fmtDay(d)}${d === t ? " (today)" : ""}</option>`).join("");
-    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate" || activeTab() === "today") runSlate(); if (activeTab() === "dvp") renderDvp(); };
+    $("dateSel").onchange = () => { renderGames(); slateStale = true; if (activeTab() === "slate" || activeTab() === "today") runSlate(); if (activeTab() === "dvp") renderDvp(); if (activeTab() === "edges") renderEdges(); };
     const teams = Object.keys(model.teams).sort();
     const opts = teams.map((t) => `<option>${t}</option>`).join("");
     $("awaySel").innerHTML = opts; $("homeSel").innerHTML = opts;
@@ -2104,14 +2105,14 @@
   let edgeLines = {}, edgeLinesDate = null;
   /* Every bet with a price on it tonight, with the model's chance, the book's (no-vig) chance and expected value. */
   function edgeRows() {
-    const out = [], date = slate.date;
+    const es = edgeSlateNow(), out = [], date = es.date;
     const add = (key, leg, am, fair, res, src) => {
       const D = decOf(am); if (!D) return;
       const e = SGP.evaluate([leg], res).legs[0], lose = 1 - e.p - e.push;
       out.push({ key, leg, am, src, p: e.p, push: e.push, fair, ev: e.p * (D - 1) - lose, edge: fair != null ? e.p / (1 - e.push || 1) - fair : null });
     };
     const twoWay = (a, b) => { const x = decOf(a), y = decOf(b); return x && y ? [(1 / x) / (1 / x + 1 / y), (1 / y) / (1 / x + 1 / y)] : [null, null]; };
-    for (const x of slate.games) {
+    for (const x of es.games) {
       if (x.g.home_score != null) continue;
       const key = `${x.g.away}@${x.g.home}`, L = edgeLines[key], r = x.res;
       if (L) {
@@ -2132,16 +2133,50 @@
     }
     return out.sort((a, b) => b.ev - a.ev);
   }
+  /* Edges always uses the blended stats (this season with last season faded in), whatever the Stats menu says:
+     in testing it agreed with the sportsbooks far better and fewer of its "edges" were noise. When the menu is
+     already on blended, it shares the Today/Slate simulations; otherwise it runs its own set. */
+  const EDGE_BASIS = "blend";
+  let edgeSlate = null, edgeWorker = null;
+  function edgeKey(date) {
+    const games = model.schedule.filter((g) => g.date === date && model.teams[g.away] && model.teams[g.home]);
+    return `${date}|${$("slateN").value}|${[...outFor(games.flatMap((g) => [g.away, g.home]))].sort().join(",")}|${JSON.stringify(minutes)}`;
+  }
+  function edgeSlateNow() { return basis === EDGE_BASIS ? slate : edgeSlate; }
+  function runEdgeSlate(date) {
+    const games = model.schedule.filter((g) => g.date === date && model.teams[g.away] && model.teams[g.home]);
+    const n = +$("slateN").value, run = { date, key: edgeKey(date), n, games: [], done: false, prog: 0 };
+    edgeSlate = run;
+    let k = 0;
+    const next = () => {
+      if (edgeSlate !== run) return;
+      if (k >= games.length) { run.done = true; renderEdges(); return; }
+      const g = games[k], opts = Object.assign(slateOpts(g), { basis: EDGE_BASIS });
+      const store = (res) => { if (edgeSlate === run) { run.games.push({ g, opts, res }); k++; run.prog = k / games.length; next(); } };
+      try {
+        if (!edgeWorker) { edgeWorker = new Worker("js/worker.js" + VQ); edgeWorker.postMessage({ model }); }
+        edgeWorker.onmessage = (e) => {
+          if (e.data.progress != null) { run.prog = (k + e.data.progress) / games.length; const el = $("edgeProg"); if (el) el.textContent = Math.round(run.prog * 100) + "%"; }
+          if (e.data.done) store(e.data.result);
+        };
+        edgeWorker.postMessage({ run: true, opts, n });
+      } catch (err) { setTimeout(() => store(NBASim.summarize(NBASim.simulateMany(model, opts, n))), 20); }
+    };
+    if (!games.length) { run.done = true; return; }
+    next();
+  }
   function renderEdges() {
     if (activeTab() !== "edges" || !model) return;
-    if (!slate || slateStale || slate.date !== $("dateSel").value) { if (!slate || slate.date !== $("dateSel").value || slateStale) runSlate(); }
     const date = $("dateSel").value;
+    if (basis === EDGE_BASIS) { if (!slate || slateStale || slate.date !== date) runSlate(); }
+    else if (!edgeSlate || edgeSlate.key !== edgeKey(date)) runEdgeSlate(date);
+    const es = edgeSlateNow();
     if (edgeLinesDate !== date) { edgeLinesDate = date; edgeLines = {}; espnLines(date).then((l) => { edgeLines = l; renderEdges(); }); }
     const nGame = Object.keys(edgeLines).length, nProp = bookProps && bookProps.date === date ? Object.keys(bookProps.props || {}).length : 0;
     const propNote = nProp ? `prop lines for ${nProp} players (best price across ${Object.values(BOOK_NAME).slice(0, 4).join(", ")} and more${bookProps.fetched ? `, fetched ${new Date(bookProps.fetched).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : ""})`
       : bookProps && bookProps.note && /yet/.test(bookProps.note) && date === todayET() ? "player prop lines arrive with the afternoon update (about 4:45pm ET)" : `no player prop lines${bookProps && bookProps.props ? " for this date" : " — see “Setting up prop lines” below"}`;
     $("edgeInfo").innerHTML = `Game lines from ESPN for ${nGame} game${nGame === 1 ? "" : "s"} · ${propNote}`;
-    if (!slate || slate.date !== date || !slate.done) { $("edgeBody").innerHTML = `<p class="dim">Simulating the games on ${fmtDay(date)}… ${$("todayProg").style.width || ""}</p>`; return; }
+    if (!es || es.date !== date || !es.done) { $("edgeBody").innerHTML = `<p class="dim">Simulating the games on ${fmtDay(date)} with blended stats… <span id="edgeProg">${es === slate ? $("todayProg").style.width || "" : Math.round(((es && es.prog) || 0) * 100) + "%"}</span></p>`; return; }
     const kind = $("edgeKind").value, minE = +$("edgeMin").value;
     let rows = edgeRows().filter((r) => (kind === "all" || (kind === "props") === (r.leg.type === "prop")) && r.ev >= minE);
     const shown = rows.slice(0, 60);
@@ -2156,7 +2191,7 @@
         <td class="acts"><button class="add" data-i="${i}">+ Parlay</button> <button class="logb" data-i="${i}">Log bet</button></td></tr>`;
     }).join("") + `</table></div><p class="note">Edge = model chance minus the book's chance once its built-in margin (the vig) is removed. Value per $100 = what a $100 bet at this price wins or loses on average if the model is right. Even good models are wrong a lot on single games: look for edges of several percent, and treat small ones as noise.</p>`;
     $("edgeBody").querySelectorAll("button.add").forEach((b) => (b.onclick = () => { const r = shown[+b.dataset.i]; addLeg(r.key, r.leg); }));
-    $("edgeBody").querySelectorAll("button.logb").forEach((b) => (b.onclick = () => { const r = shown[+b.dataset.i]; openBetForm([{ key: r.key, leg: r.leg }], r.am, r.p, slate.date); }));
+    $("edgeBody").querySelectorAll("button.logb").forEach((b) => (b.onclick = () => { const r = shown[+b.dataset.i]; openBetForm([{ key: r.key, leg: r.leg }], r.am, r.p, es.date); }));
     $("edgeBody").querySelectorAll(".pl[data-pid]").forEach((s) => (s.onclick = () => openPlayer(s.dataset.pid, s.dataset.stat, s.dataset.key)));
   }
 

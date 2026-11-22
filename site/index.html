@@ -64,7 +64,7 @@
   <!-- EDGES -->
   <section id="tab-edges" class="pane">
     <div class="todayhead"><h2>Edges</h2><span class="dim" id="edgeInfo"></span></div>
-    <p class="dim">Every bet the sportsbooks have a price on, ranked by how much the model likes the price. Pick the date above.</p>
+    <p class="dim">Every bet the sportsbooks have a price on, ranked by how much the model likes the price. Pick the date above. Edges always uses <b>blended stats</b> (this season, with last season faded in), which matched the sportsbooks far better in testing; the Stats menu still controls every other tab.</p>
     <div class="controls"><label>Show <select id="edgeKind"><option value="all">everything</option><option value="props">player props</option><option value="games">game lines</option></select></label>
       <label>Value at least <select id="edgeMin"><option value="0">+$0 per $100</option><option value="0.03">+$3</option><option value="0.06" selected>+$6</option><option value="0.1">+$10</option><option value="-1">show all, even bad prices</option></select></label></div>
     <div id="edgeBody"></div>
