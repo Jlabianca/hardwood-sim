@@ -45,9 +45,35 @@
   const col = (t) => colCache[t] || (colCache[t] = model && model.teams[t] ? teamColor(model.teams[t]) : "#9aa");
 
   // ---------------- boot ----------------
-  fetch("data/model.json").then((r) => r.json()).then((m) => {
+  // The model is built twice a day; refresh who's out from ESPN's injury report when the page opens (waits up to
+  // 2.5 s so the first simulations already use it). Your own in/out toggles still win.
+  function freshInjuries(m) {
+    const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const t = setTimeout(() => ctl && ctl.abort(), 2500);
+    return fetch("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries", { cache: "no-store", signal: ctl && ctl.signal }).then((r) => r.json()).then((j) => {
+      const now = {};
+      for (const tm of j.injuries || []) for (const inj of tm.injuries || []) {
+        const id = String((inj.athlete || {}).id || "");
+        if (id) now[id] = { st: String(inj.status || "").trim(), note: String(inj.shortComment || "").slice(0, 140) };
+      }
+      if (Object.keys(now).length < 10) return []; // feed looks broken: keep the build's list
+      const changes = [];
+      for (const tm in m.teams) for (const p of m.teams[tm].players) {
+        const was = !!p.out, n = now[p.id], away = /^Not with team/.test(p.status || "");
+        if (n) { p.status = n.st; p.inj_note = n.note; p.out = /^(out|injured reserve|suspension)$/i.test(n.st) || away; }
+        else if (p.inj_note != null && p.inj_note !== "" || /^(out|day-to-day|questionable|doubtful|suspension)$/i.test(p.status || "")) { // off the report now
+          p.status = away ? p.status : ""; p.inj_note = ""; p.out = away;
+        }
+        if (was !== p.out) changes.push(`${p.short || p.name} ${p.out ? "out" : "back"}`);
+      }
+      m.injuries_live = new Date().toISOString();
+      return changes;
+    }).catch(() => []).finally(() => clearTimeout(t));
+  }
+  fetch("data/model.json").then((r) => r.json()).then((m) => freshInjuries(m).then((ch) => [m, ch])).then(([m, injChanges]) => {
     model = m;
     defOut = defaultOutSet();
+    if (injChanges.length) setTimeout(() => toast(`Injury report updated since the last build: ${injChanges.slice(0, 4).join(", ")}${injChanges.length > 4 ? ` +${injChanges.length - 4} more` : ""}`), 800);
     for (const t in m.teams) for (const p of m.teams[t].players) players[p.id] = { name: p.name, short: p.short, team: t, pos: p.pos };
     $("dataLine").textContent = `${m.season_label} season · data through ${fmtDate(m.through)} · built ${m.generated}`;
     initPicker();
@@ -1029,7 +1055,10 @@
     const key = id + "|" + k;
     const simMean = sim && sim.d[k] ? meanOf(sim.d[k]) : null;
     const recentForLine = played.slice(-10).map((r) => logVal(r, k));
-    const line = lines[key] != null ? lines[key] : simMean != null ? Math.floor(simMean) + 0.5 : recentForLine.length ? Math.floor(meanOf(recentForLine)) + 0.5 : 0.5;
+    // same line as the Today page: yours, else the sportsbook's, else his season average; the model's own number only as a last resort
+    const lf_ = lineFor(id, k, $("dateSel").value);
+    const line = lf_ ? lf_.line : simMean != null ? Math.floor(simMean) + 0.5 : recentForLine.length ? Math.floor(meanOf(recentForLine)) + 0.5 : 0.5;
+    const lineSrc = !lf_ ? "" : lf_.src === "book" ? " (sportsbook line)" : lf_.src === "avg" ? " (his season average)" : " (your line)";
     const avg = (rs) => (rs.length ? meanOf(rs.map((r) => logVal(r, k))) : null);
     const hit = (rs) => { const o = rs.filter((r) => logVal(r, k) > line).length; return rs.length ? `${o}/${rs.length}` : "–"; };
     const hitPct = (rs) => (rs.length ? rs.filter((r) => logVal(r, k) > line).length / rs.length : null);
@@ -1081,7 +1110,7 @@
     if (ctx && sim && sim.d[k]) {
       const o = pOver(sim.d[k], line), u = pUnder(sim.d[k], line), side = o >= u ? "o" : "u", pr = Math.max(o, u), c = conf(pr);
       const rs = reasonsFor(id, k, side, ctx, line);
-      take = `<div class="take"><b>Model's take:</b> ${c.label === "Pass" ? `toss-up at ${line} ${STAT_LBL[k]} (${inTen(pr)} either way)` : `${side === "o" ? "OVER" : "UNDER"} ${line} ${STAT_LBL[k]} · <span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · hits ${inTen(pr)}`}<br>${whyHtml(rs)}</div>`;
+      take = `<div class="take"><b>Model's take:</b> ${c.label === "Pass" ? `toss-up at ${line} ${STAT_LBL[k]}${lineSrc} (${inTen(pr)} either way)` : `${side === "o" ? "OVER" : "UNDER"} ${line} ${STAT_LBL[k]}<span class="dim">${lineSrc}</span> · <span class="${c.cls}">${c.label}</span> <span class="stars">${c.stars}</span> · hits ${inTen(pr)}`}<br>${whyHtml(rs)}</div>`;
     }
     $("pcardBox").innerHTML = `<button class="close" id="pcClose">✕</button>
       <h2>${P.name} <span class="pos">${P.pos}</span> <button class="fav ${favs.has(id) ? "on" : ""}" id="pcFav" title="Pin this player on the Today page">${favs.has(id) ? "★ Favorite" : "☆ Favorite"}</button></h2>
@@ -1399,7 +1428,7 @@
   // ---------------- plain language (Simple mode) ----------------
   const both = (adv, simp) => `<span class="adv">${adv}</span><span class="simp">${simp}</span>`;
   const inTen = (p) => { const n = Math.round(p * 10); return n <= 0 ? "less than 1 in 10" : n >= 10 ? "almost always" : `about ${n} in 10`; };
-  const oneIn = (p) => (p > 0 ? `about 1 in ${1 / p < 10 ? (1 / p).toFixed(1).replace(/\.0$/, "") : Math.round(1 / p)}` : "–");
+  const oneIn = (p) => (p >= 0.3 ? inTen(p) : p > 0 ? `about 1 in ${1 / p < 10 ? (1 / p).toFixed(1).replace(/\.0$/, "") : Math.round(1 / p)}` : "–"); // likely things read better as "7 in 10"
   const plainPay = (p) => (p > 0 && p < 1 ? `fair price: $100 wins $${Math.round((1 / p - 1) * 100)}` : "");
   function conf(p) { // p = model probability on the better side; tuned to be calibrated on the backtest
     if (p >= 0.62) return { label: "Strong", cls: "lbl-strong", stars: "★★★" };

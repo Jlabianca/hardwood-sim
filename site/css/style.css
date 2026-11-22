@@ -325,3 +325,4 @@ body[data-tab="bets"] .picker, body[data-tab="season"] .picker { display: none; 
 }
 @media (max-width: 700px) { .dock { right: 8px; left: 8px; bottom: 8px; width: auto; } }
 .betpop { z-index: 25; }
+@media (max-width: 700px) { #search { min-width: 140px; } .hdrtools { flex-wrap: wrap; } }
