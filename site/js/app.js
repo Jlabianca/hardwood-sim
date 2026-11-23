@@ -2198,7 +2198,101 @@
   // ---------------- bet log ----------------
   let bets = [];
   try { bets = JSON.parse(localStorage.getItem("hw_bets") || "[]"); } catch (e) {}
-  const saveBets = () => { try { localStorage.setItem("hw_bets", JSON.stringify(bets)); } catch (e) { toast("Couldn't save: browser storage is full or blocked"); } };
+  let betsDeleted = {}; // id -> when it was deleted, so a delete on one device removes it everywhere
+  try { betsDeleted = JSON.parse(localStorage.getItem("hw_bets_del") || "{}"); } catch (e) {}
+  const saveBets = (fromSync) => {
+    try { localStorage.setItem("hw_bets", JSON.stringify(bets)); localStorage.setItem("hw_bets_del", JSON.stringify(betsDeleted)); } catch (e) { toast("Couldn't save: browser storage is full or blocked"); }
+    if (!fromSync) syncSoon();
+  };
+  const touched = (b) => b.updated || Date.parse(b.at) || 0;
+
+  /* ---- sync across devices through a private GitHub repo ----
+     Each device stores a GitHub token (fine-grained, contents read/write on ONE private repo) in this browser
+     only. The bet log lives in that repo as bets.json; every change is merged with what's there, bet by bet. */
+  const SYNC_FILE = "bets.json";
+  let sync = null; try { sync = JSON.parse(localStorage.getItem("hw_sync") || "null"); } catch (e) {}
+  let syncTimer = null, syncBusy = false, syncAgain = false, syncState = { at: null, err: null };
+  const gh = (path, init) => fetch("https://api.github.com" + path, Object.assign({ cache: "no-store" }, init, {
+    headers: Object.assign({ Accept: "application/vnd.github+json", Authorization: "Bearer " + sync.token, "X-GitHub-Api-Version": "2022-11-28" }, (init || {}).headers || {}) }));
+  const b64enc = (str) => btoa(unescape(encodeURIComponent(str)));
+  const b64dec = (str) => decodeURIComponent(escape(atob(str.replace(/\s/g, ""))));
+  function mergeBets(remote) {
+    const del = Object.assign({}, remote.deleted || {});
+    for (const [id, t] of Object.entries(betsDeleted)) del[id] = Math.max(del[id] || 0, t);
+    const byId = {};
+    for (const b of (remote.bets || []).concat(bets)) { if (!b || !b.id) continue; if (!byId[b.id] || touched(b) > touched(byId[b.id])) byId[b.id] = b; }
+    const out = Object.values(byId).filter((b) => !(del[b.id] >= touched(b))).sort((a, b) => (a.at < b.at ? 1 : -1));
+    const cutoff = Date.now() - 400 * 864e5; // forget very old delete markers
+    for (const id in del) if (del[id] < cutoff) delete del[id];
+    return { bets: out, deleted: del };
+  }
+  function syncSoon() { if (!sync) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, 1200); }
+  async function syncNow() {
+    if (!sync) return;
+    if (syncBusy) { syncAgain = true; return; }
+    syncBusy = true; syncState.err = null; renderSyncBox("Syncing…");
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const path = `/repos/${sync.owner}/${sync.repo}/contents/${SYNC_FILE}`;
+        const r = await gh(path);
+        let remote = { bets: [], deleted: {} }, sha;
+        if (r.status === 200) { const j = await r.json(); sha = j.sha; remote = JSON.parse(b64dec(j.content) || "{}"); }
+        else if (r.status === 404) { const rr = await gh(`/repos/${sync.owner}/${sync.repo}`); if (rr.status === 404) throw new Error(`can't see the repo ${sync.owner}/${sync.repo}: create it (private) and give the token access to it`); }
+        else if (r.status === 401) throw new Error("GitHub didn't accept the token (expired or revoked?): connect again with a new one");
+        else if (r.status === 403) throw new Error("the token can't read that repo: give it Contents read and write on " + sync.repo);
+        else throw new Error("GitHub answered " + r.status);
+        const merged = mergeBets(remote), before = JSON.stringify(bets);
+        bets = merged.bets; betsDeleted = merged.deleted; saveBets(true);
+        if (JSON.stringify(bets) !== before && activeTab() === "bets") renderBets();
+        const body = JSON.stringify({ app: "hardwood-sim", updated: new Date().toISOString(), bets: merged.bets, deleted: merged.deleted }, null, 1);
+        if (r.status === 200 && JSON.stringify(remote.bets || []) === JSON.stringify(merged.bets) && JSON.stringify(remote.deleted || {}) === JSON.stringify(merged.deleted)) break; // nothing new to upload
+        const w = await gh(path, { method: "PUT", body: JSON.stringify({ message: `bets: ${merged.bets.length} logged`, content: b64enc(body), sha }) });
+        if (w.status === 200 || w.status === 201) break;
+        if (w.status === 409 || w.status === 422) continue; // another device saved in between: merge again
+        if (w.status === 403 || w.status === 404) throw new Error("the token can read but not write: give it Contents read AND write");
+        throw new Error("GitHub answered " + w.status + " when saving");
+      }
+      syncState.at = new Date();
+    } catch (e) { syncState.err = e.message || String(e); }
+    syncBusy = false; renderSyncBox();
+    if (syncAgain) { syncAgain = false; syncSoon(); }
+  }
+  function renderSyncBox(busyMsg) {
+    const el = $("syncBox"); if (!el) return;
+    if (!sync) {
+      el.innerHTML = `<b>See your bets on every device</b> <span class="dim">— keeps this log in a private GitHub repo of yours.</span>
+        <div class="syncform"><input id="syncToken" type="password" placeholder="GitHub token (github_pat_…)" autocomplete="off" spellcheck="false">
+        <input id="syncRepo" value="hardwood-bets" size="14" title="Name of your private repo"> <button id="syncGo" class="primary">Connect</button></div>
+        <details><summary>How to set it up (once, about 3 minutes)</summary><ol>
+          <li>On GitHub, create a new <b>private</b> repository named <code>hardwood-bets</code> (tick “Add a README”).</li>
+          <li>Go to Settings → Developer settings → Personal access tokens → <b>Fine-grained tokens</b> → Generate new token.</li>
+          <li>Repository access: <b>Only select repositories</b> → hardwood-bets. Permissions: <b>Contents → Read and write</b>. Set the longest expiration it allows.</li>
+          <li>Copy the token, paste it above and press Connect. Do the same on your phone (the same token works on every device).</li>
+        </ol><p class="dim">The token can only touch that one repo, and it's saved only in this browser. Don't connect on a computer other people use. To stop syncing on a device, press Disconnect; to cut off every device, delete the token on GitHub.</p></details>`;
+      $("syncGo").onclick = connectSync;
+      return;
+    }
+    const st = busyMsg || (syncState.err ? `<span class="edge-lo">Sync problem: ${syncState.err}</span>` : syncState.at ? `synced ${syncState.at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : "connected");
+    el.innerHTML = `<b>Synced across your devices</b> <span class="dim">via ${sync.owner}/${sync.repo}</span> · ${st} <button id="syncNowBtn">Sync now</button> <button id="syncOff">Disconnect</button>`;
+    $("syncNowBtn").onclick = syncNow;
+    $("syncOff").onclick = () => { sync = null; try { localStorage.removeItem("hw_sync"); } catch (e) {} renderSyncBox(); toast("This device stopped syncing (your bets stay here and on GitHub)"); };
+  }
+  async function connectSync() {
+    const token = $("syncToken").value.trim(), repo = ($("syncRepo").value.trim() || "hardwood-bets").replace(/^.*\//, "");
+    if (!/^(github_pat_|ghp_)/.test(token)) { toast("That doesn't look like a GitHub token (they start with github_pat_)"); return; }
+    $("syncGo").disabled = true; $("syncGo").textContent = "Checking…";
+    try {
+      const r = await fetch("https://api.github.com/user", { cache: "no-store", headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json" } });
+      if (r.status === 401) throw new Error("GitHub didn't accept that token");
+      const me = await r.json();
+      sync = { token, owner: me.login, repo };
+      try { localStorage.setItem("hw_sync", JSON.stringify(sync)); } catch (e) {}
+      await syncNow();
+      if (syncState.err) toast("Connected, but: " + syncState.err); else toast(`Syncing with ${sync.owner}/${repo}: ${bets.length} bet${bets.length === 1 ? "" : "s"} in your log`);
+    } catch (e) { toast(e.message); renderSyncBox(); }
+  }
+  if (sync) setTimeout(syncNow, 1500); // pull other devices' bets when the page opens
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && sync) syncNow(); });
   function openBetForm(legs, am, modelP, date) {
     const f = $("betForm");
     f.innerHTML = `<div class="card betform"><b>Log this bet</b><div class="dim">${legs.map((x) => legText(x.leg, x.key)).join(" + ")}</div>
@@ -2213,7 +2307,7 @@
       const D = SGP.toDecimal($("bfOdds").value), stake = parseFloat($("bfStake").value);
       if (!D || !(stake > 0)) { toast("Enter the odds (like -110 or +450) and a stake"); return; }
       const amv = D >= 2 ? Math.round((D - 1) * 100) : Math.round(-100 / (D - 1));
-      bets.unshift({ id: Date.now().toString(36), at: new Date().toISOString(), date, legs, odds: amv, stake, modelP });
+      bets.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), at: new Date().toISOString(), updated: Date.now(), date, legs, odds: amv, stake, modelP });
       try { localStorage.setItem("hw_stake", String(stake)); } catch (e) {}
       saveBets(); f.style.display = "none";
       toast(`Saved to My bets: ${legs.length > 1 ? legs.length + "-leg parlay" : legText(legs[0].leg, legs[0].key)}`);
@@ -2266,6 +2360,7 @@
   };
   function renderBets() {
     if (activeTab() !== "bets") return;
+    if ($("syncBox") && !$("syncBox").innerHTML) renderSyncBox();
     if (!logs) loadLogs().then(renderBets);
     const graded = bets.map((b) => ({ b, r: gradeBet(b) }));
     const done = graded.filter((x) => x.r && x.r !== "V");
@@ -2296,8 +2391,8 @@
         <td>${fmtAm(b.odds)}</td><td>$${b.stake}</td><td class="adv">${b.modelP != null ? pct(b.modelP) : "–"}</td>
         <td>${r ? lbl[r] : `<span class="dim">open</span>`}${b.manual ? ` <span class="dim">(set by you)</span>` : ""}</td><td>${r ? money(profitOf(b, r)) : ""}</td>
         <td class="acts"><select data-set="${b.id}" title="Set the result yourself"><option value="">auto</option>${["W", "L", "P", "V"].map((v) => `<option value="${v}" ${b.manual === v ? "selected" : ""}>${{ W: "won", L: "lost", P: "push", V: "void" }[v]}</option>`).join("")}</select> <button class="x" data-del="${b.id}" title="delete">×</button></td></tr>`).join("") + `</table></div>`;
-    $("betList").querySelectorAll("select[data-set]").forEach((s) => (s.onchange = () => { const b = bets.find((x) => x.id === s.dataset.set); b.manual = s.value || undefined; saveBets(); renderBets(); }));
-    $("betList").querySelectorAll("button[data-del]").forEach((x) => (x.onclick = () => { if (!confirmDel(x)) return; bets = bets.filter((b) => b.id !== x.dataset.del); saveBets(); renderBets(); }));
+    $("betList").querySelectorAll("select[data-set]").forEach((s) => (s.onchange = () => { const b = bets.find((x) => x.id === s.dataset.set); b.manual = s.value || undefined; b.updated = Date.now(); saveBets(); renderBets(); }));
+    $("betList").querySelectorAll("button[data-del]").forEach((x) => (x.onclick = () => { if (!confirmDel(x)) return; betsDeleted[x.dataset.del] = Date.now(); bets = bets.filter((b) => b.id !== x.dataset.del); saveBets(); renderBets(); }));
   }
   function confirmDel(btn) { // two clicks to delete, no pop-up
     if (btn.dataset.armed) return true;

@@ -74,12 +74,13 @@
 
   <!-- BETS -->
   <section id="tab-bets" class="pane">
-    <div class="todayhead"><h2>My bets</h2><span class="dim">saved in this browser · graded automatically from box scores</span></div>
+    <div class="todayhead"><h2>My bets</h2><span class="dim">graded automatically from box scores</span></div>
+    <div class="card syncbox" id="syncBox"></div>
     <div class="cards" id="betCards"></div>
     <div id="betBreak"></div>
     <div id="betList"></div>
     <div class="controls" style="margin-top:12px"><button id="btnBetExport">Download backup</button> <label class="filebtn">Restore / merge a backup <input type="file" id="betImport" accept=".json,application/json"></label></div>
-    <p class="note">Bets live in this browser only. Download a backup now and then, and restore it to move your log to another phone or computer. Use the result menu to fix anything graded wrong (for example a bet a sportsbook voided).</p>
+    <p class="note">Without sync, bets live in this browser only; with sync on (box at the top) every device you connect shares one log. A backup file is still handy now and then. Use the result menu to fix anything graded wrong (for example a bet a sportsbook voided).</p>
   </section>
 
   <!-- SEASON -->
