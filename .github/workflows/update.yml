@@ -23,11 +23,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-deploy:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,12 +59,16 @@ jobs:
           git add tracker/
           if ! git diff --cached --quiet; then
             git commit -m "tracker: save projections/odds $(TZ=America/New_York date +%F) [skip ci]"
-            # the rebuilt site/data files are uncommitted here, so set them aside while pulling
-            if git pull --rebase --autostash origin main && git push origin HEAD:main; then
-              echo "::notice title=tracker::saved projections committed"
-            else
-              echo "::warning title=tracker::could not push saved projections (will retry next run)"
-            fi
+            # the rebuilt site/data files are uncommitted here, so set them aside while pulling;
+            # if another run saved the same day's file in between, keep this run's (newer) copy; try 3 times
+            ok=""
+            for i in 1 2 3; do
+              if git pull --rebase -X theirs --autostash origin main && git push origin HEAD:main; then ok=1; break; fi
+              git rebase --abort 2>/dev/null || true
+              sleep $((i * 5))
+            done
+            if [ -n "$ok" ]; then echo "::notice title=tracker::saved projections committed"
+            else echo "::warning title=tracker::could not push saved projections (will retry next run)"; fi
           fi
       - name: Stamp file versions (so browsers load the new code)
         run: sed -i "s/__V__/${GITHUB_SHA::7}-$(date +%s)/g" site/index.html
@@ -75,5 +76,15 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+  # Publishing runs as its own job, after the build job has completely finished. When it ran right after the
+  # upload in the same job, GitHub sometimes hadn't registered the upload yet ("No artifacts named github-pages").
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4
