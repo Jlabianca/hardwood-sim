@@ -2315,11 +2315,54 @@
     };
   }
   /* Grade one leg from final scores and box scores: "W", "L", "P" (push), "V" (void: player didn't play) or null. */
+  /* Results straight from ESPN for bets the site's own data hasn't caught up on yet. The box-score data the site
+     is rebuilt from usually lands a day late, so without this, last night's bets sat "open" until a rebuild. */
+  const espnDay = {}, espnBoxes = {}; // date -> { at, games: { "A@H": {id, as, hs, h1a, h1h, final, period} } }; eventId -> { p, final }
+  let gradeBusy = false, gradeTimer = null;
+  function fetchEspnDay(date) {
+    return fetch(ESPN + "scoreboard?dates=" + date.replace(/-/g, ""), { cache: "no-store" }).then((r) => r.json()).then((j) => {
+      const games = {};
+      for (const e of j.events || []) {
+        const c = e.competitions[0], side = (h) => c.competitors.find((x) => x.homeAway === h) || {};
+        const A = side("away"), H = side("home"), q = (t, i) => +(((t.linescores || [])[i] || {}).value || 0);
+        games[`${A.team.abbreviation}@${H.team.abbreviation}`] = { id: e.id, as: +A.score || 0, hs: +H.score || 0, h1a: q(A, 0) + q(A, 1), h1h: q(H, 0) + q(H, 1),
+          final: e.status.type.state === "post", period: e.status.period, half: e.status.type.name === "STATUS_HALFTIME" };
+      }
+      espnDay[date] = { at: Date.now(), games };
+    }).catch(() => {});
+  }
+  async function refreshBetGrades() {
+    if (gradeBusy || !model) return;
+    gradeBusy = true;
+    let changed = false;
+    try {
+      const open = bets.filter((b) => !b.manual && gradeBet(b) == null && b.date <= todayET());
+      const dates = [...new Set(open.map((b) => b.date))];
+      const stale = dates.filter((d) => !espnDay[d] || (Date.now() - espnDay[d].at > 90e3 && Object.values(espnDay[d].games).some((g) => !g.final)));
+      if (stale.length) { await Promise.all(stale.map(fetchEspnDay)); changed = true; }
+      const needBox = new Set();
+      for (const b of open) for (const x of b.legs) {
+        if (x.leg.type !== "prop") continue;
+        const eg = espnDay[b.date] && espnDay[b.date].games[x.key];
+        if (eg && eg.final && !(espnBoxes[eg.id] && espnBoxes[eg.id].final) && !(live.box[eg.id] && live.box[eg.id].final)) needBox.add(eg.id);
+      }
+      if (needBox.size) {
+        await Promise.all([...needBox].map((id) => fetch(ESPN + "summary?event=" + id, { cache: "no-store" }).then((r) => r.json()).then((sm) => { espnBoxes[id] = { final: true, p: parseBox(sm) }; }).catch(() => {})));
+        changed = true;
+      }
+    } finally { gradeBusy = false; }
+    if (changed && activeTab() === "bets") renderBets(true);
+    // keep checking while the bets tab is open and something is still being played or waiting on a result
+    clearTimeout(gradeTimer);
+    if (activeTab() === "bets" && bets.some((b) => !b.manual && gradeBet(b) == null && b.date <= todayET())) gradeTimer = setTimeout(refreshBetGrades, 120e3);
+  }
   function gradeLeg(x, date) {
     const [A, H] = x.key.split("@"), l = x.leg;
+    const eg = espnDay[date] && espnDay[date].games[x.key];
     let g = model.schedule.find((s) => s.date === date && s.away === A && s.home === H && s.home_score != null);
     let hs, as;
     if (g) { hs = g.home_score; as = g.away_score; }
+    else if (eg && eg.final) { hs = eg.hs; as = eg.as; g = { id: eg.id, espn: true }; }
     else { const lg = live.day === date && live.games.find((y) => y.away === A && y.home === H && y.state === "post"); if (!lg) return null; hs = lg.hs; as = lg.as; g = lg; }
     const cmp = (v, line, over) => (v === line ? "P" : (v > line) === over ? "W" : "L");
     const m = hs - as, t = hs + as;
@@ -2327,12 +2370,16 @@
     if (l.type === "spread") return cmp((l.side === "home" ? m : -m) + l.line, 0, true);
     if (l.type === "total") return cmp(t, l.line, l.side === "o");
     if (l.type === "ttotal") return cmp(l.team === "home" ? hs : as, l.line, l.side === "o");
-    if (l.type === "h1total") return null;
+    if (l.type === "h1total") return eg && (eg.final || eg.period > 2 || eg.half) ? cmp(eg.h1a + eg.h1h, l.line, l.side === "o") : null;
     // player prop
     let row = null;
     const lr = logs && logs.players && (logs.players[l.id] || []).find((r) => r[0] === date);
     if (lr) { if (lr[19]) return "V"; row = {}; for (const k in LOG_IX) row[k] = lr[LOG_IX[k]]; }
-    else if (g.id && live.box[g.id] && live.box[g.id].final) { const b = live.box[g.id].p[l.id]; if (!b || b.dnp) return "V"; row = b; }
+    else if (g.id && ((live.box[g.id] && live.box[g.id].final) || (espnBoxes[g.id] && espnBoxes[g.id].final))) {
+      const bx = (live.box[g.id] && live.box[g.id].final ? live.box[g.id] : espnBoxes[g.id]).p, b = bx[l.id];
+      if (!b || b.dnp) return "V"; row = b;
+    }
+    else if (g.espn) return null; // ESPN final score is in; box score still loading
     else if (logs && logs.players) {
       // the game is in the data but he has no line: he didn't play
       const teamPlayed = g.home_score != null && Object.values(logs.players).some((rs) => rs.some((r) => r[0] === date && (r[20] === A || r[20] === H)));
@@ -2358,8 +2405,9 @@
     if (l.type === "prop") return `Props: ${STAT_LBL[l.stat]}`;
     return { ml: "Moneyline", spread: "Spread", total: "Game total", ttotal: "Team total", h1total: "1st half total" }[l.type];
   };
-  function renderBets() {
+  function renderBets(fromGrades) {
     if (activeTab() !== "bets") return;
+    if (!fromGrades) refreshBetGrades();
     if ($("syncBox") && !$("syncBox").innerHTML) renderSyncBox();
     if (!logs) loadLogs().then(renderBets);
     const graded = bets.map((b) => ({ b, r: gradeBet(b) }));
@@ -2492,24 +2540,27 @@
       // box scores: the games you opened, plus any in-progress or finished game you're tracking a player in
       const want = live.games.filter((g) => g.state !== "pre" && (live.open[g.id] || liveTracked(g)));
       return Promise.all(want.map((g) => g.state === "post" && live.box[g.id] && live.box[g.id].final ? null : fetch(ESPN + "summary?event=" + g.id, { cache: "no-store" }).then((r) => r.json()).then((s) => {
-        const out = {};
-        for (const side of (s.boxscore && s.boxscore.players) || []) {
-          const st = side.statistics && side.statistics[0];
-          if (!st) continue;
-          for (const a of st.athletes || []) {
-            const row = { dnp: a.didNotPlay, team: side.team && side.team.abbreviation, starter: a.starter };
-            (st.names || st.labels || []).forEach((nm, i) => {
-              const v = (a.stats || [])[i];
-              if (BOX_COL[nm]) row[BOX_COL[nm]] = +v || 0;
-              if (nm === "3PT") row.fg3m = +String(v || "0").split("-")[0] || 0;
-            });
-            out[a.athlete.id] = row;
-          }
-        }
-        live.box[g.id] = { at: Date.now(), final: g.state === "post", p: out };
+        live.box[g.id] = { at: Date.now(), final: g.state === "post", p: parseBox(s) };
       }).catch(() => {})));
     }).catch((e) => { live.err = "Couldn't reach the live scoreboard (" + e.message + "). Retrying…"; })
       .finally(() => { live.busy = false; renderLive(); });
+  }
+  function parseBox(s) { // ESPN game summary -> { athleteId: { min, pts, reb, ast, fg3m, stl, blk, tov, pf, dnp, team } }
+    const out = {};
+    for (const side of (s.boxscore && s.boxscore.players) || []) {
+      const st = side.statistics && side.statistics[0];
+      if (!st) continue;
+      for (const a of st.athletes || []) {
+        const row = { dnp: a.didNotPlay, team: side.team && side.team.abbreviation, starter: a.starter };
+        (st.names || st.labels || []).forEach((nm, i) => {
+          const v = (a.stats || [])[i];
+          if (BOX_COL[nm]) row[BOX_COL[nm]] = +v || 0;
+          if (nm === "3PT") row.fg3m = +String(v || "0").split("-")[0] || 0;
+        });
+        out[a.athlete.id] = row;
+      }
+    }
+    return out;
   }
   function startLive() {
     stopLive();
